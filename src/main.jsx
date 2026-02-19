@@ -54,7 +54,7 @@ const manualFirebaseConfig = {
   projectId: "gamesync-7fdde",
   storageBucket: "gamesync-7fdde.firebasestorage.app",
   messagingSenderId: "209595978385",
-  appId: "1:209595978385:web:804bf3167a353073be2530",
+  appId: "1:209595978385:web:804bf3167a353073be2530"
 };
 
 const getFirebaseConfig = () => {
