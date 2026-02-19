@@ -7,3 +7,5 @@ const firebaseConfig = {
   appId: "1:209595978385:web:804bf3167a353073be2530",
   measurementId: "G-Z4RLFK079H"
 };
+export default App;
+4.  **Save** the file (`Ctrl + S`).
