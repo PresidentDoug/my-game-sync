@@ -49,11 +49,12 @@ import {
   UserPlus,
   Video,
   Timer,
-  ExternalLink
+  ExternalLink,
+  ShieldCheck,
+  X
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
-// IMPORTANT: Paste your real Firebase project keys here!
 const manualFirebaseConfig = {
   apiKey: "AIzaSyDFHW-ZV5HPxGNJlwbi4Ravrs0tnyRW3Eg",
   authDomain: "gamesync-7fdde.firebaseapp.com",
@@ -109,6 +110,7 @@ const App = () => {
   const [currentView, setCurrentView] = useState('calendar'); 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
+  const [rosterGuild, setRosterGuild] = useState(null); 
   const [searchTerm, setSearchTerm] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
   const [newGuild, setNewGuild] = useState({ name: '', desc: '' });
@@ -192,6 +194,8 @@ const App = () => {
     setTimeout(() => setProfileSaving(false), 500);
   };
 
+  // --- GUILD PROTOCOLS ---
+
   const deleteGuildSessions = async (gId) => {
     const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'));
     const toDelete = snap.docs.filter(d => d.data().guildId === gId);
@@ -200,7 +204,7 @@ const App = () => {
   };
 
   const disbandGuild = async (gId) => {
-    if (!window.confirm("ARE YOU SURE? This will permanently delete the guild and all missions. Continue?")) return;
+    if (!window.confirm("PERMANENT DISBAND: This will delete the guild and all active missions. Continue?")) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', gId));
     await deleteGuildSessions(gId);
   };
@@ -209,9 +213,9 @@ const App = () => {
     if (!newGuild.name || !user || !db) return;
     const gRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'guilds'), { 
       name: newGuild.name, 
-      desc: newGuild.desc || "Active Sector",
+      desc: newGuild.desc || "Active Tactical Sector",
       ownerId: user.uid, 
-      members: [user.uid],
+      members: [{ uid: user.uid, name: profile.displayName }], // Store as object
       createdAt: serverTimestamp() 
     });
     const updatedJoined = [...(profile.joinedGuilds || []), gRef.id];
@@ -222,25 +226,30 @@ const App = () => {
 
   const handleToggleGuild = async (guild) => {
     if (!user || !db) return;
-    const joined = profile.joinedGuilds || [];
-    const isEnlisted = joined.includes(guild.id);
+    const joinedList = profile.joinedGuilds || [];
+    const isEnlisted = joinedList.includes(guild.id);
     const members = guild.members || [];
 
     if (isEnlisted) {
-      const newJoined = joined.filter(id => id !== guild.id);
+      // RETIRE LOGIC
+      const newJoined = joinedList.filter(id => id !== guild.id);
       await saveProfile({ ...profile, joinedGuilds: newJoined });
-      if (members.length <= 1) {
+      
+      const remainingMembers = members.filter(m => (m.uid || m) !== user.uid);
+      if (remainingMembers.length === 0) {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id));
         await deleteGuildSessions(guild.id);
       } else {
+        const memberToRemove = members.find(m => (m.uid || m) === user.uid);
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), {
-          members: arrayRemove(user.uid)
+          members: arrayRemove(memberToRemove)
         });
       }
     } else {
-      await saveProfile({ ...profile, joinedGuilds: [...joined, guild.id] });
+      // ENLIST LOGIC
+      await saveProfile({ ...profile, joinedGuilds: [...joinedList, guild.id] });
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), {
-        members: arrayUnion(user.uid)
+        members: arrayUnion({ uid: user.uid, name: profile.displayName })
       });
     }
   };
@@ -289,7 +298,7 @@ const App = () => {
     return groups;
   }, [sessions, activeGuildId, profile.joinedGuilds, searchTerm]);
 
-  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Update src/App.jsx with Firebase keys.</p></div>;
+  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Update Firebase keys in src/App.jsx.</p></div>;
   if (authLoading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Gamepad2 className="w-12 h-12 text-indigo-500 animate-bounce" /></div>;
 
   if (!user) {
@@ -307,7 +316,7 @@ const App = () => {
             <input type="password" placeholder="PASSWORD" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} />
             {authError && <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-[10px] text-rose-500 font-bold uppercase">{authError}</div>}
             <button type="submit" className="w-full bg-indigo-600 p-6 rounded-3xl font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-2">
-              {authMode === 'login' ? 'Establish Link' : 'Initialize Identity'} <ChevronRight className="w-4 h-4" />
+              Establish Link
             </button>
           </form>
           <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="w-full mt-10 text-[10px] font-black uppercase opacity-30 hover:opacity-100 transition tracking-widest">
@@ -333,13 +342,33 @@ const App = () => {
       </header>
 
       <main className="max-w-7xl mx-auto p-8 flex flex-col md:flex-row gap-8">
-        <aside className="w-full md:w-64">
-          <p className="text-[10px] font-black uppercase opacity-30 mb-4 tracking-widest">Active Channels</p>
+        <aside className="w-full md:w-72">
+          <p className="text-[10px] font-black uppercase opacity-30 mb-4 tracking-widest">Command Stream</p>
           <button onClick={() => setActiveGuildId('all')} className={`w-full text-left p-3 rounded-xl mb-2 font-black text-xs transition ${activeGuildId === 'all' ? activeTheme.button : 'hover:bg-slate-500/10'}`}>Global Feed</button>
-          {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
-            <button key={g.id} onClick={() => setActiveGuildId(g.id)} className={`w-full text-left p-3 rounded-xl mb-2 font-bold text-xs transition ${activeGuildId === g.id ? activeTheme.button : 'hover:bg-slate-500/10'}`}>{String(g.name)}</button>
-          ))}
-          <button onClick={() => setIsGuildModalOpen(true)} className="w-full p-4 mt-4 rounded-xl border border-dashed border-slate-500/30 text-[10px] font-black uppercase opacity-40 hover:opacity-100 transition flex items-center justify-center gap-2"><Compass className="w-4 h-4" /> Find Guilds</button>
+          
+          <div className="mt-6 space-y-2">
+            <p className="text-[9px] font-black uppercase opacity-20 ml-2 mb-2 tracking-widest">Joined Sectors</p>
+            {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
+                <div key={g.id} className="flex items-center gap-1 group">
+                    <button 
+                        onClick={() => setActiveGuildId(g.id)} 
+                        className={`flex-1 text-left p-3 rounded-xl font-bold text-xs transition truncate ${activeGuildId === g.id ? activeTheme.button : 'hover:bg-slate-500/10'}`}
+                    >
+                        {String(g.name)}
+                    </button>
+                    {/* SIDEBAR ROSTER BUTTON */}
+                    <button 
+                        onClick={() => setRosterGuild(g)}
+                        className="p-3 rounded-xl bg-slate-500/5 hover:bg-indigo-500 hover:text-white transition opacity-0 group-hover:opacity-100"
+                        title="View Roster"
+                    >
+                        <Users className="w-4 h-4" />
+                    </button>
+                </div>
+            ))}
+          </div>
+
+          <button onClick={() => setIsGuildModalOpen(true)} className="w-full p-4 mt-6 rounded-xl border border-dashed border-slate-500/30 text-[10px] font-black uppercase opacity-40 hover:opacity-100 transition flex items-center justify-center gap-2"><Compass className="w-4 h-4" /> Find Sectors</button>
         </aside>
 
         <div className="flex-1">
@@ -374,31 +403,24 @@ const App = () => {
                               </div>
                             )}
                             
-                            <div className="flex justify-between items-start mb-6 pr-24">
-                              <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors leading-tight">{String(session.gameTitle)}</h4>
-                            </div>
+                            <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors leading-tight mb-4">{String(session.gameTitle)}</h4>
 
                             <div className="flex flex-wrap gap-4 mb-6">
                               <div className="flex items-center gap-2 opacity-40">
                                 <Clock className="w-3 h-3" />
-                                <span className="text-[10px] font-black uppercase tracking-tighter">{String(session.startTime)}</span>
+                                <span className="text-[10px] font-black uppercase">{String(session.startTime)}</span>
                               </div>
                               <div className="flex items-center gap-2 opacity-40">
                                 <Timer className="w-3 h-3" />
-                                <span className="text-[10px] font-black uppercase tracking-tighter">{session.duration} HR SESSION</span>
+                                <span className="text-[10px] font-black uppercase">{session.duration} HR</span>
                               </div>
                             </div>
 
                             <div className="mb-8 flex-1">
-                                <div className="flex items-center gap-2 mb-4 opacity-60">
-                                    <Users className="w-3 h-3" />
-                                    <span className="text-[10px] font-black uppercase tracking-widest">
-                                        {session.participants?.length || 0} / {capacity} Operators Enlisted
-                                    </span>
-                                </div>
+                                <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-4">{session.participants?.length || 0} / {capacity} Enlisted</p>
                                 <div className="flex flex-wrap gap-2">
                                     {session.participants?.map((p, i) => (
-                                    <div key={i} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase`}>
+                                    <div key={i} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase shadow-sm`}>
                                         <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
                                         {String(p.name)}
                                     </div>
@@ -412,7 +434,7 @@ const App = () => {
                                 disabled={isFull && !isEnlisted}
                                 className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition active:scale-95 ${isEnlisted ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : isFull ? 'bg-slate-500/10 text-slate-400 opacity-50 cursor-not-allowed' : activeTheme.button}`}
                               >
-                                {isEnlisted ? 'Retire from Session' : isFull ? 'Mission Full' : 'Enlist Now'}
+                                {isEnlisted ? 'Retire' : isFull ? 'Mission Full' : 'Enlist'}
                               </button>
                               {session.userId === user?.uid && (
                                 <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id))} className="p-4 rounded-2xl bg-rose-500/10 text-rose-500 transition opacity-20 hover:opacity-100">
@@ -441,39 +463,66 @@ const App = () => {
         </div>
       </main>
 
+      {/* ROSTER MODAL: High-visibility intel deck */}
+      {rosterGuild && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
+          <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
+            <div className="flex justify-between items-start mb-10">
+                <div>
+                    <h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>
+                    <p className="text-[10px] font-black uppercase opacity-30 mt-2 tracking-widest">Active Personnel Intel</p>
+                </div>
+                <button onClick={() => setRosterGuild(null)} className="w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
+            </div>
+            
+            <div className="space-y-3 max-h-[50vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
+                {rosterGuild.members?.map((m, idx) => (
+                    <div key={idx} className={`${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4`}>
+                        <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white">
+                            {String(m.name || 'O').charAt(0)}
+                        </div>
+                        <div className="flex-1 overflow-hidden">
+                            <p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p>
+                            <p className="text-[8px] opacity-20 font-bold uppercase truncate">{m.uid || m}</p>
+                        </div>
+                        {(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}
+                    </div>
+                ))}
+            </div>
+            
+            <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest transition shadow-xl active:scale-95">Close Deck</button>
+          </div>
+        </div>
+      )}
+
       {/* GUILD DIRECTORY MODAL */}
       {isGuildModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10">
-              <h3 className="text-4xl font-black uppercase italic tracking-tighter">Guild Directory</h3>
-              <button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-500/10 hover:rotate-90 transition">✕</button>
+              <h3 className="text-4xl font-black uppercase italic tracking-tighter">Directory</h3>
+              <button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button>
             </div>
             <div className="space-y-4 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
               {guilds.map(g => (
                 <div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center group`}>
                     <div className="flex-1">
                         <p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>
-                        <div className="flex items-center gap-3 mt-1 opacity-40 text-[9px] font-black uppercase">
-                            <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {g.members?.length || 0} Operators</span>
-                            {g.ownerId === user?.uid && <span className="text-amber-500 flex items-center gap-1 font-black underline"><Crown className="w-3 h-3" /> COMMANDER</span>}
-                        </div>
+                        <p className="text-[9px] font-black opacity-30 mt-1 uppercase">{g.members?.length || 0} Members</p>
                     </div>
                     <div className="flex items-center gap-2">
                         <button onClick={() => handleToggleGuild(g)} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition active:scale-95 ${profile.joinedGuilds?.includes(g.id) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>
                           {profile.joinedGuilds?.includes(g.id) ? 'Retire' : 'Enlist'}
                         </button>
                         {g.ownerId === user?.uid && (
-                          <button onClick={() => disbandGuild(g.id)} title="Disband Guild" className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white">
-                            <Skull className="w-4 h-4" />
-                          </button>
+                          <button onClick={() => disbandGuild(g.id)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white"><Skull className="w-4 h-4" /></button>
                         )}
                     </div>
                 </div>
               ))}
             </div>
             <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
-              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Establish Tactical Sector</p>
+              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">New Tactical Sector</p>
               <input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} />
               <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button>
             </div>
@@ -490,75 +539,38 @@ const App = () => {
               <button onClick={() => setIsModalOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button>
             </div>
             <form onSubmit={handleSubmitSession} className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase opacity-40 ml-2">Game / Operation Name</label>
-                <input placeholder="E.G. WARZONE RANKED / RAIDS" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
-              </div>
-
+              <input placeholder="GAME / OPERATION NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
+              
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Operation Date</label>
-                    <input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
-                </div>
-                <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Deploy Time</label>
-                    <input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
-                </div>
-                <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Duration (Hours)</label>
-                    <div className="relative">
-                        <Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
-                        <input type="number" min="1" max="24" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} />
-                    </div>
+                <input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
+                <input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
+                <div className="relative">
+                    <Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
+                    <input type="number" placeholder="HR" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Command Guild</label>
-                    <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
-                        <option value="">Select Guild</option>
-                        {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
-                        <option key={g.id} value={g.id}>{String(g.name)}</option>
-                        ))}
-                    </select>
-                </div>
-                <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Additional Openings</label>
-                    <div className="relative">
-                        <UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
-                        <input type="number" min="1" max="99" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} />
-                    </div>
+                <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
+                    <option value="">Select Guild</option>
+                    {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
+                    <option key={g.id} value={g.id}>{String(g.name)}</option>
+                    ))}
+                </select>
+                <div className="relative">
+                    <UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
+                    <input type="number" placeholder="SLOTS" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} />
                 </div>
               </div>
 
               <div className={`${activeTheme.bg} p-6 rounded-3xl border ${activeTheme.border} flex items-center justify-between`}>
-                <div className="flex items-center gap-4">
-                    <div className={`p-3 rounded-xl ${formData.isStreaming ? 'bg-rose-500 text-white shadow-lg' : 'bg-slate-500/10 opacity-40'}`}>
-                        <Video className="w-5 h-5" />
-                    </div>
-                    <div>
-                        <p className="text-[11px] font-black uppercase tracking-widest">Broadcast Mission</p>
-                        <p className="text-[9px] opacity-40 uppercase font-bold">Show stream status on hub</p>
-                    </div>
-                </div>
-                <div className="flex items-center gap-4">
-                    {formData.isStreaming && (
-                        <select className="bg-black text-white p-2 px-4 rounded-xl text-[10px] font-black uppercase outline-none border border-white/10" value={formData.streamPlatform} onChange={e => setFormData({...formData, streamPlatform: e.target.value})}>
-                            <option>Twitch</option>
-                            <option>YouTube</option>
-                            <option>Kick</option>
-                        </select>
-                    )}
-                    <button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}>
-                        <div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div>
-                    </button>
-                </div>
+                <div className="flex items-center gap-4"><Video className="w-5 h-5 opacity-40" /><div><p className="text-[11px] font-black uppercase tracking-widest">Broadcast Mission</p></div></div>
+                <button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}>
+                    <div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div>
+                </button>
               </div>
 
-              <p className="text-[9px] font-black uppercase opacity-30 text-center italic">Deployment Capacity: {Number(formData.maxOpenings) + 1} Operators</p>
-
-              <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Deploy Mission</button>
+              <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Deploy Mission</button>
             </form>
           </div>
         </div>
