@@ -49,17 +49,19 @@ import {
   Copy,
   Check,
   Terminal,
-  ChevronRight
+  ChevronRight,
+  AlertCircle
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
+// IMPORTANT: Paste your real keys here!
 const manualFirebaseConfig = {
-  apiKey: "AIzaSyDFHW-ZV5HPxGNJlwbi4Ravrs0tnyRW3Eg",
-  authDomain: "gamesync-7fdde.firebaseapp.com",
-  projectId: "gamesync-7fdde",
-  storageBucket: "gamesync-7fdde.firebasestorage.app",
-  messagingSenderId: "209595978385",
-  appId: "1:209595978385:web:804bf3167a353073be2530"
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID"
 };
 
 const getFirebaseConfig = () => {
@@ -74,6 +76,9 @@ const getFirebaseConfig = () => {
 };
 
 const firebaseConfig = getFirebaseConfig();
+
+// FORCED LOGIC: We check if the key starts with the standard Firebase 'AIza' prefix
+// to bypass any issues where the placeholder text 'YOUR_API_KEY' is stuck in cache.
 const isConfigValid = !!(firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey.startsWith("AIza"));
 
 const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'community-calendar-production';
@@ -176,7 +181,6 @@ const App = () => {
       if (err.code === 'permission-denied') setPermissionError(true);
     };
 
-    // Auto-initialize profile if it doesn't exist
     const checkProfile = async () => {
       const pRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
       const snap = await getDoc(pRef);
@@ -313,9 +317,23 @@ const App = () => {
 
   if (!isConfigValid) return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center">
-      <Shield className="w-16 h-16 text-amber-500 mb-6" />
-      <h2 className="text-3xl font-black uppercase italic mb-4">Configuration Required</h2>
-      <p className="text-slate-400 mb-8 max-w-md font-medium">Paste your Firebase keys into <code className="bg-black px-2 py-1 rounded text-indigo-400">src/App.jsx</code>.</p>
+      <AlertCircle className="w-16 h-16 text-rose-500 mb-6" />
+      <h2 className="text-3xl font-black uppercase italic mb-4">Configuration Error</h2>
+      <p className="text-slate-400 mb-4 max-w-md font-medium">The app is loaded, but your Firebase keys are not being recognized by the browser.</p>
+      
+      {/* DEBUG PANEL */}
+      <div className="bg-black/50 p-6 rounded-2xl font-mono text-[11px] text-rose-400 mb-8 border border-rose-500/20 text-left w-full max-w-md">
+        <p className="mb-2 text-rose-300 uppercase font-black tracking-widest text-[9px]">Build Data Sync Debug:</p>
+        <p>API Key Detected: {firebaseConfig?.apiKey ? `YES (starts with ${firebaseConfig.apiKey.slice(0, 6)}...)` : "NO"}</p>
+        <p>Valid Firebase Prefix? {firebaseConfig?.apiKey?.startsWith("AIza") ? "YES" : "NO"}</p>
+        <p>Current Path: {window.location.pathname}</p>
+      </div>
+
+      <p className="text-slate-500 text-xs mb-8">If "API Key Detected" says NO but your keys are in VS Code, your GitHub build is serving an old version of the site. Try pushing a fresh commit.</p>
+      
+      <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="bg-indigo-600 hover:bg-indigo-700 text-white font-black px-8 py-4 rounded-2xl uppercase text-xs tracking-widest transition">
+        Open Firebase Console
+      </a>
     </div>
   );
 
@@ -452,11 +470,11 @@ const App = () => {
                 </div>
                 
                 <div className="mt-16 flex justify-center gap-6">
-                  <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`flex flex-col items-center gap-4 p-6 rounded-[2.5rem] border-2 transition ${profile.theme === 'light' ? 'border-indigo-600 bg-white' : 'border-transparent opacity-40'}`}>
+                  <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`flex flex-col items-center gap-4 p-6 rounded-[2.5rem] border-2 transition ${profile.theme === 'light' ? 'border-indigo-600 bg-white shadow-xl' : 'border-transparent opacity-40 hover:opacity-100'}`}>
                     <Palette className="w-8 h-8 text-indigo-600" />
                     <span className="text-[10px] font-black uppercase">Standard</span>
                   </button>
-                  <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`flex flex-col items-center gap-4 p-6 rounded-[2.5rem] border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400 bg-zinc-900' : 'border-transparent opacity-40'}`}>
+                  <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`flex flex-col items-center gap-4 p-6 rounded-[2.5rem] border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400 bg-zinc-900 shadow-xl shadow-black/50' : 'border-transparent opacity-40 hover:opacity-100'}`}>
                     <Zap className="w-8 h-8 text-indigo-400" />
                     <span className="text-[10px] font-black uppercase">Midnight</span>
                   </button>
@@ -478,7 +496,7 @@ const App = () => {
               <button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-100 dark:bg-zinc-800 opacity-60 hover:opacity-100 transition hover:rotate-90">✕</button>
             </div>
             <div className="space-y-4 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
-              {guilds.map(g => (
+              {guilds.length === 0 ? <p className="text-center py-10 opacity-30 uppercase font-black text-[10px]">Scanning for available guilds...</p> : guilds.map(g => (
                 <div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center transition group`}>
                   <div>
                     <p className="font-black uppercase tracking-tight text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>
@@ -497,19 +515,21 @@ const App = () => {
             
             <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
               <p className="text-[10px] font-black uppercase tracking-widest opacity-40 text-center mb-2">Register a New Command Center</p>
-              <input 
-                placeholder="GUILD NAME (e.g. PC MASTERRACE)" 
-                className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition`} 
-                value={newGuild.name} 
-                onChange={e => setNewGuild({...newGuild, name: e.target.value})} 
-              />
-              <input 
-                placeholder="DESCRIPTION" 
-                className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition`} 
-                value={newGuild.desc} 
-                onChange={e => setNewGuild({...newGuild, desc: e.target.value})} 
-              />
-              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Initialize Guild Deployment</button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <input 
+                  placeholder="GUILD NAME" 
+                  className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition`} 
+                  value={newGuild.name} 
+                  onChange={e => setNewGuild({...newGuild, name: e.target.value})} 
+                />
+                <input 
+                  placeholder="DESCRIPTION" 
+                  className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition`} 
+                  value={newGuild.desc} 
+                  onChange={e => setNewGuild({...newGuild, desc: e.target.value})} 
+                />
+              </div>
+              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Guild</button>
             </div>
           </div>
         </div>
