@@ -8,7 +8,7 @@ import {
   updateDoc,
   deleteDoc, 
   doc, 
-  setDoc,
+  setDoc, 
   getDoc,
   getDocs,
   query,
@@ -46,7 +46,10 @@ import {
   ChevronRight,
   Crown,
   Skull,
-  UserPlus
+  UserPlus,
+  Video,
+  Timer,
+  ExternalLink
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
@@ -117,9 +120,11 @@ const App = () => {
     gameTitle: '',
     date: new Date().toISOString().split('T')[0],
     startTime: '19:00',
-    endTime: '21:00',
+    duration: '2',
+    isStreaming: false,
+    streamPlatform: 'Twitch',
     guildId: '',
-    maxOpenings: 4 // Default to 4 openings + creator = 5 total
+    maxOpenings: 4
   });
 
   useEffect(() => {
@@ -361,16 +366,30 @@ const App = () => {
                         const isFull = (session.participants?.length || 0) >= capacity;
 
                         return (
-                          <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:-translate-y-1 group relative overflow-hidden`}>
-                            {isFull && !isEnlisted && <div className="absolute top-4 right-4 bg-rose-500/10 text-rose-500 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest">Locked</div>}
-                            <div className="flex justify-between items-start mb-6">
-                              <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors">{String(session.gameTitle)}</h4>
+                          <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:-translate-y-1 group relative overflow-hidden flex flex-col`}>
+                            {session.isStreaming && (
+                              <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-rose-600 text-white px-3 py-1 rounded-full animate-pulse shadow-lg">
+                                <Video className="w-3 h-3" />
+                                <span className="text-[9px] font-black uppercase tracking-widest">{session.streamPlatform} Live</span>
+                              </div>
+                            )}
+                            
+                            <div className="flex justify-between items-start mb-6 pr-24">
+                              <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors leading-tight">{String(session.gameTitle)}</h4>
+                            </div>
+
+                            <div className="flex flex-wrap gap-4 mb-6">
                               <div className="flex items-center gap-2 opacity-40">
                                 <Clock className="w-3 h-3" />
-                                <span className="text-[10px] font-black uppercase">{String(session.startTime)}</span>
+                                <span className="text-[10px] font-black uppercase tracking-tighter">{String(session.startTime)}</span>
+                              </div>
+                              <div className="flex items-center gap-2 opacity-40">
+                                <Timer className="w-3 h-3" />
+                                <span className="text-[10px] font-black uppercase tracking-tighter">{session.duration} HR SESSION</span>
                               </div>
                             </div>
-                            <div className="mb-8">
+
+                            <div className="mb-8 flex-1">
                                 <div className="flex items-center gap-2 mb-4 opacity-60">
                                     <Users className="w-3 h-3" />
                                     <span className="text-[10px] font-black uppercase tracking-widest">
@@ -386,13 +405,14 @@ const App = () => {
                                     ))}
                                 </div>
                             </div>
-                            <div className="flex gap-3">
+                            
+                            <div className="flex gap-3 mt-auto">
                               <button 
                                 onClick={() => toggleJoinSession(session)} 
                                 disabled={isFull && !isEnlisted}
                                 className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition active:scale-95 ${isEnlisted ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : isFull ? 'bg-slate-500/10 text-slate-400 opacity-50 cursor-not-allowed' : activeTheme.button}`}
                               >
-                                {isEnlisted ? 'Leave Mission' : isFull ? 'Mission Full' : 'Enlist Now'}
+                                {isEnlisted ? 'Retire from Session' : isFull ? 'Mission Full' : 'Enlist Now'}
                               </button>
                               {session.userId === user?.uid && (
                                 <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id))} className="p-4 rounded-2xl bg-rose-500/10 text-rose-500 transition opacity-20 hover:opacity-100">
@@ -414,7 +434,7 @@ const App = () => {
               <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} onBlur={() => saveProfile(profile)} className="w-full bg-transparent text-center text-5xl font-black italic uppercase outline-none focus:text-indigo-600 transition mb-12" />
               <div className="grid grid-cols-2 gap-6 pt-10 border-t border-slate-500/10">
                 <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`p-8 rounded-[2.5rem] border-2 transition ${profile.theme === 'light' ? 'border-indigo-600 bg-white shadow-xl' : 'border-transparent opacity-40 hover:opacity-100'}`}><Palette className="w-8 h-8 text-indigo-600" /></button>
-                <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`p-8 rounded-[2.5rem] border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400 bg-zinc-900 shadow-xl' : 'border-transparent opacity-40 hover:opacity-100'}`}><Zap className="w-8 h-8 text-indigo-400" /></button>
+                <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`p-8 rounded-[2.5rem] border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400 bg-zinc-900 shadow-xl' : 'border-transparent opacity-40'}`}><Zap className="w-8 h-8 text-indigo-400" /></button>
               </div>
             </div>
           )}
@@ -435,7 +455,7 @@ const App = () => {
                     <div className="flex-1">
                         <p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>
                         <div className="flex items-center gap-3 mt-1 opacity-40 text-[9px] font-black uppercase">
-                            <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {g.members?.length || 0}</span>
+                            <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {g.members?.length || 0} Operators</span>
                             {g.ownerId === user?.uid && <span className="text-amber-500 flex items-center gap-1 font-black underline"><Crown className="w-3 h-3" /> COMMANDER</span>}
                         </div>
                     </div>
@@ -463,33 +483,82 @@ const App = () => {
 
       {/* NEW MISSION MODAL */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
-          <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-lg w-full shadow-2xl`}>
-            <div className="flex justify-between items-start mb-10"><h3 className="text-4xl font-black uppercase italic tracking-tighter">New Mission</h3><button onClick={() => setIsModalOpen(false)}>✕</button></div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md transition-all">
+          <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
+            <div className="flex justify-between items-start mb-8">
+              <h3 className="text-4xl font-black uppercase italic tracking-tighter">New Mission</h3>
+              <button onClick={() => setIsModalOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button>
+            </div>
             <form onSubmit={handleSubmitSession} className="space-y-6">
-              <input placeholder="GAME NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
-              
-              <div className="grid grid-cols-2 gap-6">
-                <input type="date" className="p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
-                <input type="time" className="p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase opacity-40 ml-2">Game / Operation Name</label>
+                <input placeholder="E.G. WARZONE RANKED / RAIDS" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Operation Date</label>
+                    <input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
+                </div>
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Deploy Time</label>
+                    <input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
+                </div>
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Duration (Hours)</label>
+                    <div className="relative">
+                        <Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
+                        <input type="number" min="1" max="24" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} />
+                    </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <select className="w-full p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black uppercase" value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
-                    <option value="">Select Command Guild</option>
-                    {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
-                    <option key={g.id} value={g.id}>{String(g.name)}</option>
-                    ))}
-                </select>
-                <div className="relative">
-                    <UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
-                    <input type="number" min="1" max="99" placeholder="OPEN SLOTS" className="w-full pl-12 p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black" value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} />
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Command Guild</label>
+                    <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
+                        <option value="">Select Guild</option>
+                        {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
+                        <option key={g.id} value={g.id}>{String(g.name)}</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase opacity-40 ml-2">Additional Openings</label>
+                    <div className="relative">
+                        <UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
+                        <input type="number" min="1" max="99" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} />
+                    </div>
+                </div>
+              </div>
+
+              <div className={`${activeTheme.bg} p-6 rounded-3xl border ${activeTheme.border} flex items-center justify-between`}>
+                <div className="flex items-center gap-4">
+                    <div className={`p-3 rounded-xl ${formData.isStreaming ? 'bg-rose-500 text-white shadow-lg' : 'bg-slate-500/10 opacity-40'}`}>
+                        <Video className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <p className="text-[11px] font-black uppercase tracking-widest">Broadcast Mission</p>
+                        <p className="text-[9px] opacity-40 uppercase font-bold">Show stream status on hub</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-4">
+                    {formData.isStreaming && (
+                        <select className="bg-black text-white p-2 px-4 rounded-xl text-[10px] font-black uppercase outline-none border border-white/10" value={formData.streamPlatform} onChange={e => setFormData({...formData, streamPlatform: e.target.value})}>
+                            <option>Twitch</option>
+                            <option>YouTube</option>
+                            <option>Kick</option>
+                        </select>
+                    )}
+                    <button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}>
+                        <div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div>
+                    </button>
                 </div>
               </div>
 
               <p className="text-[9px] font-black uppercase opacity-30 text-center italic">Deployment Capacity: {Number(formData.maxOpenings) + 1} Operators</p>
 
-              <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Deploy Mission</button>
+              <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Deploy Mission</button>
             </form>
           </div>
         </div>
