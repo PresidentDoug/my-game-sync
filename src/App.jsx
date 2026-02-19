@@ -45,10 +45,12 @@ import {
   User as UserIcon,
   ChevronRight,
   Crown,
-  Skull
+  Skull,
+  UserPlus
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
+// IMPORTANT: Paste your real Firebase project keys here!
 const manualFirebaseConfig = {
   apiKey: "AIzaSyDFHW-ZV5HPxGNJlwbi4Ravrs0tnyRW3Eg",
   authDomain: "gamesync-7fdde.firebaseapp.com",
@@ -116,7 +118,8 @@ const App = () => {
     date: new Date().toISOString().split('T')[0],
     startTime: '19:00',
     endTime: '21:00',
-    guildId: ''
+    guildId: '',
+    maxOpenings: 4 // Default to 4 openings + creator = 5 total
   });
 
   useEffect(() => {
@@ -184,10 +187,7 @@ const App = () => {
     setTimeout(() => setProfileSaving(false), 500);
   };
 
-  // --- GUILD DESTRUCTION TOOLS ---
-
   const deleteGuildSessions = async (gId) => {
-    // Manual scan to avoid requiring Firestore Indexes
     const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'));
     const toDelete = snap.docs.filter(d => d.data().guildId === gId);
     const deletions = toDelete.map(d => deleteDoc(d.ref));
@@ -195,7 +195,7 @@ const App = () => {
   };
 
   const disbandGuild = async (gId) => {
-    if (!window.confirm("PERMANENT DISBAND: This will delete the guild and ALL active missions for every member. Continue?")) return;
+    if (!window.confirm("ARE YOU SURE? This will permanently delete the guild and all missions. Continue?")) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', gId));
     await deleteGuildSessions(gId);
   };
@@ -222,11 +222,8 @@ const App = () => {
     const members = guild.members || [];
 
     if (isEnlisted) {
-      // RETIRE LOGIC
       const newJoined = joined.filter(id => id !== guild.id);
       await saveProfile({ ...profile, joinedGuilds: newJoined });
-      
-      // AUTO-DESTRUCT Check
       if (members.length <= 1) {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id));
         await deleteGuildSessions(guild.id);
@@ -236,7 +233,6 @@ const App = () => {
         });
       }
     } else {
-      // ENLIST LOGIC
       await saveProfile({ ...profile, joinedGuilds: [...joined, guild.id] });
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), {
         members: arrayUnion(user.uid)
@@ -248,8 +244,16 @@ const App = () => {
     if (!db || !user) return;
     const participants = session.participants || [];
     const isJoined = participants.some(p => p.uid === user.uid);
-    const updated = isJoined ? participants.filter(p => p.uid !== user.uid) : [...participants, { uid: user.uid, name: profile.displayName }];
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
+    const capacity = Number(session.maxOpenings || 0) + 1;
+
+    if (isJoined) {
+      const updated = participants.filter(p => p.uid !== user.uid);
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
+    } else {
+      if (participants.length >= capacity) return;
+      const updated = [...participants, { uid: user.uid, name: profile.displayName }];
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
+    }
   };
 
   const handleSubmitSession = async (e) => {
@@ -257,7 +261,15 @@ const App = () => {
     if (!db || !user) return;
     const gId = formData.guildId || activeGuildId;
     if (gId === 'all') return;
-    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'), { ...formData, guildId: gId, userId: user.uid, userName: profile.displayName, participants: [{ uid: user.uid, name: profile.displayName }], createdAt: serverTimestamp() });
+    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'), { 
+      ...formData, 
+      maxOpenings: Number(formData.maxOpenings),
+      guildId: gId, 
+      userId: user.uid, 
+      userName: profile.displayName, 
+      participants: [{ uid: user.uid, name: profile.displayName }], 
+      createdAt: serverTimestamp() 
+    });
     setIsModalOpen(false);
   };
 
@@ -272,24 +284,22 @@ const App = () => {
     return groups;
   }, [sessions, activeGuildId, profile.joinedGuilds, searchTerm]);
 
-  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Update src/App.jsx with valid Firebase keys.</p></div>;
+  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Update src/App.jsx with Firebase keys.</p></div>;
   if (authLoading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Gamepad2 className="w-12 h-12 text-indigo-500 animate-bounce" /></div>;
 
   if (!user) {
     return (
       <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white">
-        <div className="w-full max-w-md bg-zinc-900 p-12 rounded-[4rem] border border-zinc-800 shadow-2xl relative">
+        <div className="w-full max-w-md bg-zinc-900 p-12 rounded-[4rem] border border-zinc-800 shadow-2xl relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-indigo-600 animate-pulse"></div>
           <div className="text-center mb-10">
             <Gamepad2 className="w-16 h-16 text-indigo-500 mx-auto mb-6" />
             <h1 className="text-4xl font-black uppercase tracking-tighter italic">GameSync</h1>
             <p className="text-[10px] uppercase font-black tracking-[0.3em] opacity-30 mt-2">Operator Identity Registry</p>
           </div>
           <form onSubmit={handleAuth} className="space-y-4">
-            {authMode === 'register' && (
-              <input type="text" placeholder="DISPLAY HANDLE" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase transition" value={authForm.displayName} onChange={e => setAuthForm({...authForm, displayName: e.target.value})} />
-            )}
-            <input type="email" placeholder="EMAIL ADDRESS" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase transition" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} />
-            <input type="password" placeholder="PASSWORD" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase transition" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} />
+            <input type="email" placeholder="EMAIL" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} />
+            <input type="password" placeholder="PASSWORD" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} />
             {authError && <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-[10px] text-rose-500 font-bold uppercase">{authError}</div>}
             <button type="submit" className="w-full bg-indigo-600 p-6 rounded-3xl font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-2">
               {authMode === 'login' ? 'Establish Link' : 'Initialize Identity'} <ChevronRight className="w-4 h-4" />
@@ -311,8 +321,8 @@ const App = () => {
           <h1 className="font-black text-xl italic uppercase">GameSync</h1>
         </div>
         <nav className="flex items-center gap-4">
-          <button onClick={() => setCurrentView('calendar')} className={`text-xs font-black uppercase transition ${currentView === 'calendar' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Hub</button>
-          <button onClick={() => setCurrentView('profile')} className={`text-xs font-black uppercase transition ${currentView === 'profile' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Profile</button>
+          <button onClick={() => setCurrentView('calendar')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'calendar' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Hub</button>
+          <button onClick={() => setCurrentView('profile')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'profile' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Profile</button>
           <button onClick={() => auth.signOut()} className="p-2 opacity-40 hover:text-rose-500 transition"><LogOut className="w-4 h-4" /></button>
         </nav>
       </header>
@@ -345,35 +355,54 @@ const App = () => {
                   <div key={date}>
                     <div className="flex items-center gap-4 mb-8"><span className="text-[11px] font-black uppercase opacity-40 tracking-widest italic">{date}</span><div className={`flex-1 h-px ${activeTheme.border}`}></div></div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                      {daySessions.map(session => (
-                        <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:-translate-y-1 group`}>
-                          <div className="flex justify-between items-start mb-6">
-                            <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors">{String(session.gameTitle)}</h4>
-                            <div className="flex items-center gap-2 opacity-40">
-                              <Clock className="w-3 h-3" />
-                              <span className="text-[10px] font-black uppercase">{String(session.startTime)}</span>
+                      {daySessions.map(session => {
+                        const isEnlisted = session.participants?.some(p => p.uid === user?.uid);
+                        const capacity = (Number(session.maxOpenings) || 0) + 1;
+                        const isFull = (session.participants?.length || 0) >= capacity;
+
+                        return (
+                          <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:-translate-y-1 group relative overflow-hidden`}>
+                            {isFull && !isEnlisted && <div className="absolute top-4 right-4 bg-rose-500/10 text-rose-500 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest">Locked</div>}
+                            <div className="flex justify-between items-start mb-6">
+                              <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors">{String(session.gameTitle)}</h4>
+                              <div className="flex items-center gap-2 opacity-40">
+                                <Clock className="w-3 h-3" />
+                                <span className="text-[10px] font-black uppercase">{String(session.startTime)}</span>
+                              </div>
+                            </div>
+                            <div className="mb-8">
+                                <div className="flex items-center gap-2 mb-4 opacity-60">
+                                    <Users className="w-3 h-3" />
+                                    <span className="text-[10px] font-black uppercase tracking-widest">
+                                        {session.participants?.length || 0} / {capacity} Operators Enlisted
+                                    </span>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {session.participants?.map((p, i) => (
+                                    <div key={i} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase`}>
+                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+                                        {String(p.name)}
+                                    </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="flex gap-3">
+                              <button 
+                                onClick={() => toggleJoinSession(session)} 
+                                disabled={isFull && !isEnlisted}
+                                className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition active:scale-95 ${isEnlisted ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : isFull ? 'bg-slate-500/10 text-slate-400 opacity-50 cursor-not-allowed' : activeTheme.button}`}
+                              >
+                                {isEnlisted ? 'Leave Mission' : isFull ? 'Mission Full' : 'Enlist Now'}
+                              </button>
+                              {session.userId === user?.uid && (
+                                <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id))} className="p-4 rounded-2xl bg-rose-500/10 text-rose-500 transition opacity-20 hover:opacity-100">
+                                  <Trash2 className="w-5 h-5" />
+                                </button>
+                              )}
                             </div>
                           </div>
-                          <div className="flex flex-wrap gap-2 mb-10">
-                            {session.participants?.map((p, i) => (
-                              <div key={i} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase`}>
-                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                                {String(p.name)}
-                              </div>
-                            ))}
-                          </div>
-                          <div className="flex gap-3">
-                            <button onClick={() => toggleJoinSession(session)} className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition active:scale-95 ${session.participants?.some(p => p.uid === user?.uid) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>
-                              {session.participants?.some(p => p.uid === user?.uid) ? 'Leave Session' : 'Join Quest'}
-                            </button>
-                            {session.userId === user?.uid && (
-                              <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id))} className="p-4 rounded-2xl bg-rose-500/10 text-rose-500 transition opacity-20 hover:opacity-100">
-                                <Trash2 className="w-5 h-5" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -384,8 +413,8 @@ const App = () => {
               <div className="w-32 h-32 mx-auto mb-10 rounded-[3rem] bg-indigo-600 flex items-center justify-center text-white text-6xl font-black shadow-2xl">{String(profile.displayName).charAt(0)}</div>
               <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} onBlur={() => saveProfile(profile)} className="w-full bg-transparent text-center text-5xl font-black italic uppercase outline-none focus:text-indigo-600 transition mb-12" />
               <div className="grid grid-cols-2 gap-6 pt-10 border-t border-slate-500/10">
-                <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`p-8 rounded-[2.5rem] border-2 transition ${profile.theme === 'light' ? 'border-indigo-600 bg-white shadow-xl' : 'border-transparent opacity-40'}`}><Palette className="w-8 h-8 text-indigo-600" /></button>
-                <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`p-8 rounded-[2.5rem] border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400 bg-zinc-900 shadow-xl' : 'border-transparent opacity-40'}`}><Zap className="w-8 h-8 text-indigo-400" /></button>
+                <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`p-8 rounded-[2.5rem] border-2 transition ${profile.theme === 'light' ? 'border-indigo-600 bg-white shadow-xl' : 'border-transparent opacity-40 hover:opacity-100'}`}><Palette className="w-8 h-8 text-indigo-600" /></button>
+                <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`p-8 rounded-[2.5rem] border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400 bg-zinc-900 shadow-xl' : 'border-transparent opacity-40 hover:opacity-100'}`}><Zap className="w-8 h-8 text-indigo-400" /></button>
               </div>
             </div>
           )}
@@ -394,20 +423,19 @@ const App = () => {
 
       {/* GUILD DIRECTORY MODAL */}
       {isGuildModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md transition-all">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10">
               <h3 className="text-4xl font-black uppercase italic tracking-tighter">Guild Directory</h3>
               <button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-500/10 hover:rotate-90 transition">✕</button>
             </div>
-            
             <div className="space-y-4 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
               {guilds.map(g => (
                 <div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center group`}>
                     <div className="flex-1">
                         <p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>
                         <div className="flex items-center gap-3 mt-1 opacity-40 text-[9px] font-black uppercase">
-                            <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {g.members?.length || 0} Operators</span>
+                            <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {g.members?.length || 0}</span>
                             {g.ownerId === user?.uid && <span className="text-amber-500 flex items-center gap-1 font-black underline"><Crown className="w-3 h-3" /> COMMANDER</span>}
                         </div>
                     </div>
@@ -424,13 +452,9 @@ const App = () => {
                 </div>
               ))}
             </div>
-
             <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
-              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Establish New Tactical Unit</p>
-              <div className="grid grid-cols-1 gap-4">
-                <input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} />
-                <input placeholder="DESCRIPTION" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.desc} onChange={e => setNewGuild({...newGuild, desc: e.target.value})} />
-              </div>
+              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Establish Tactical Sector</p>
+              <input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} />
               <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button>
             </div>
           </div>
@@ -439,19 +463,33 @@ const App = () => {
 
       {/* NEW MISSION MODAL */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md transition-all">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-lg w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10"><h3 className="text-4xl font-black uppercase italic tracking-tighter">New Mission</h3><button onClick={() => setIsModalOpen(false)}>✕</button></div>
             <form onSubmit={handleSubmitSession} className="space-y-6">
-              <input placeholder="GAME / OPERATION NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
-              <div className="grid grid-cols-2 gap-6"><input type="date" className="p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} /><input type="time" className="p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} /></div>
-              <select className="w-full p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black uppercase" value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
-                <option value="">Select Command Guild</option>
-                {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
-                  <option key={g.id} value={g.id}>{String(g.name)}</option>
-                ))}
-              </select>
-              <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 mt-4`}>Deploy Mission</button>
+              <input placeholder="GAME NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
+              
+              <div className="grid grid-cols-2 gap-6">
+                <input type="date" className="p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
+                <input type="time" className="p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <select className="w-full p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black uppercase" value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
+                    <option value="">Select Command Guild</option>
+                    {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
+                    <option key={g.id} value={g.id}>{String(g.name)}</option>
+                    ))}
+                </select>
+                <div className="relative">
+                    <UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
+                    <input type="number" min="1" max="99" placeholder="OPEN SLOTS" className="w-full pl-12 p-5 rounded-2xl bg-slate-500/10 outline-none text-xs font-black" value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} />
+                </div>
+              </div>
+
+              <p className="text-[9px] font-black uppercase opacity-30 text-center italic">Deployment Capacity: {Number(formData.maxOpenings) + 1} Operators</p>
+
+              <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Deploy Mission</button>
             </form>
           </div>
         </div>
