@@ -74,7 +74,7 @@ const getFirebaseConfig = () => {
 };
 
 const firebaseConfig = getFirebaseConfig();
-const isConfigValid = firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY";
+const isConfigValid = firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== "AIzaSyDFHW-ZV5HPxGNJlwbi4Ravrs0tnyRW3Eg";
 
 const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'community-calendar-production';
 const appId = rawAppId.replace(/[^a-zA-Z0-9]/g, '_'); 
