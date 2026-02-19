@@ -51,10 +51,17 @@ import {
   Timer,
   ExternalLink,
   ShieldCheck,
-  X
+  X,
+  Youtube,
+  Tv,
+  Monitor,
+  LayoutGrid,
+  Gamepad,
+  Target
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
+// IMPORTANT: Paste your real Firebase project keys here!
 const manualFirebaseConfig = {
   apiKey: "AIzaSyDFHW-ZV5HPxGNJlwbi4Ravrs0tnyRW3Eg",
   authDomain: "gamesync-7fdde.firebaseapp.com",
@@ -78,7 +85,7 @@ const getFirebaseConfig = () => {
 const firebaseConfig = getFirebaseConfig();
 const isConfigValid = !!(firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey.startsWith("AIza"));
 
-const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'community-calendar-production';
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'community_calendar_production';
 const appId = rawAppId.replace(/[^a-zA-Z0-9]/g, '_'); 
 
 let app, auth, db;
@@ -94,7 +101,7 @@ if (isConfigValid) {
 
 const THEMES = {
   light: { id: 'light', bg: 'bg-slate-50', card: 'bg-white', header: 'bg-white', accent: 'text-indigo-600', border: 'border-slate-100', text: 'text-slate-900', muted: 'text-slate-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' },
-  dark: { id: 'dark', bg: 'bg-zinc-950', card: 'bg-zinc-900', header: 'bg-zinc-900', accent: 'text-indigo-400', border: 'border-zinc-800', text: 'text-zinc-100', muted: 'text-zinc-500', button: 'bg-indigo-500 hover:bg-indigo-600 text-white' }
+  dark: { id: 'dark', bg: 'bg-zinc-950', card: 'bg-zinc-900', header: 'bg-zinc-900', accent: 'text-indigo-400', border: 'border-zinc-800', text: 'text-zinc-100', muted: 'text-zinc-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' }
 };
 
 const App = () => {
@@ -110,12 +117,23 @@ const App = () => {
   const [currentView, setCurrentView] = useState('calendar'); 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
+  
+  // Profile Interaction State
   const [rosterGuild, setRosterGuild] = useState(null); 
+  const [viewingProfile, setViewingProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
   const [newGuild, setNewGuild] = useState({ name: '', desc: '' });
 
-  const [profile, setProfile] = useState({ displayName: 'Operator', joinedGuilds: [], theme: 'light' });
+  const [profile, setProfile] = useState({ 
+    displayName: 'Operator', 
+    joinedGuilds: [], 
+    theme: 'light',
+    handles: { steam: '', psn: '', xbox: '', youtube: '', twitch: '', kick: '' },
+    showcaseGames: ['', '', '', '', '']
+  });
   const activeTheme = THEMES[profile.theme] || THEMES.light;
 
   const [formData, setFormData] = useState({
@@ -152,6 +170,8 @@ const App = () => {
           displayName: authForm.displayName || `Operator_${user.uid.slice(0, 4)}`,
           joinedGuilds: [],
           theme: 'light',
+          handles: { steam: '', psn: '', xbox: '', youtube: '', twitch: '', kick: '' },
+          showcaseGames: ['', '', '', '', ''],
           createdAt: serverTimestamp()
         });
       }
@@ -190,11 +210,33 @@ const App = () => {
   const saveProfile = async (data) => {
     if (!user || !db) return;
     setProfileSaving(true);
+    // 1. Save Private Info
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'), data, { merge: true });
+    
+    // 2. Mirror to Public User Directory (Reference Table)
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid), {
+        displayName: data.displayName,
+        handles: data.handles || {},
+        showcaseGames: data.showcaseGames || [],
+        theme: data.theme || 'light',
+        uid: user.uid
+    }, { merge: true });
+
     setTimeout(() => setProfileSaving(false), 500);
   };
 
-  // --- GUILD PROTOCOLS ---
+  const openPublicProfile = async (targetUid) => {
+    if (!db) return;
+    setProfileLoading(true);
+    try {
+        const snap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', targetUid));
+        if (snap.exists()) {
+            setViewingProfile(snap.data());
+        }
+    } finally {
+        setProfileLoading(false);
+    }
+  };
 
   const deleteGuildSessions = async (gId) => {
     const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'));
@@ -204,7 +246,7 @@ const App = () => {
   };
 
   const disbandGuild = async (gId) => {
-    if (!window.confirm("PERMANENT DISBAND: This will delete the guild and all active missions. Continue?")) return;
+    if (!window.confirm("PERMANENT DISBAND: Delete guild and missions?")) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', gId));
     await deleteGuildSessions(gId);
   };
@@ -215,7 +257,7 @@ const App = () => {
       name: newGuild.name, 
       desc: newGuild.desc || "Active Tactical Sector",
       ownerId: user.uid, 
-      members: [{ uid: user.uid, name: profile.displayName }], // Store as object
+      members: [{ uid: user.uid, name: profile.displayName }],
       createdAt: serverTimestamp() 
     });
     const updatedJoined = [...(profile.joinedGuilds || []), gRef.id];
@@ -231,10 +273,8 @@ const App = () => {
     const members = guild.members || [];
 
     if (isEnlisted) {
-      // RETIRE LOGIC
       const newJoined = joinedList.filter(id => id !== guild.id);
       await saveProfile({ ...profile, joinedGuilds: newJoined });
-      
       const remainingMembers = members.filter(m => (m.uid || m) !== user.uid);
       if (remainingMembers.length === 0) {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id));
@@ -246,7 +286,6 @@ const App = () => {
         });
       }
     } else {
-      // ENLIST LOGIC
       await saveProfile({ ...profile, joinedGuilds: [...joinedList, guild.id] });
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), {
         members: arrayUnion({ uid: user.uid, name: profile.displayName })
@@ -298,7 +337,7 @@ const App = () => {
     return groups;
   }, [sessions, activeGuildId, profile.joinedGuilds, searchTerm]);
 
-  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Update Firebase keys in src/App.jsx.</p></div>;
+  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Update Firebase keys in App.jsx.</p></div>;
   if (authLoading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Gamepad2 className="w-12 h-12 text-indigo-500 animate-bounce" /></div>;
 
   if (!user) {
@@ -312,16 +351,12 @@ const App = () => {
             <p className="text-[10px] uppercase font-black tracking-[0.3em] opacity-30 mt-2">Operator Identity Registry</p>
           </div>
           <form onSubmit={handleAuth} className="space-y-4">
-            <input type="email" placeholder="EMAIL" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} />
-            <input type="password" placeholder="PASSWORD" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} />
+            <input type="email" placeholder="EMAIL" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase transition" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} />
+            <input type="password" placeholder="PASSWORD" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase transition" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} />
             {authError && <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-[10px] text-rose-500 font-bold uppercase">{authError}</div>}
-            <button type="submit" className="w-full bg-indigo-600 p-6 rounded-3xl font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-2">
-              Establish Link
-            </button>
+            <button type="submit" className="w-full bg-indigo-600 p-6 rounded-3xl font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition">Establish Link</button>
           </form>
-          <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="w-full mt-10 text-[10px] font-black uppercase opacity-30 hover:opacity-100 transition tracking-widest">
-            {authMode === 'login' ? "New Operator? Create Registry" : "Have an Identity? Sign In"}
-          </button>
+          <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="w-full mt-10 text-[10px] font-black uppercase opacity-30 hover:opacity-100 transition tracking-widest">{authMode === 'login' ? "New Operator? Create Registry" : "Have an Identity? Sign In"}</button>
         </div>
       </div>
     );
@@ -343,31 +378,16 @@ const App = () => {
 
       <main className="max-w-7xl mx-auto p-8 flex flex-col md:flex-row gap-8">
         <aside className="w-full md:w-72">
-          <p className="text-[10px] font-black uppercase opacity-30 mb-4 tracking-widest">Command Stream</p>
+          <p className="text-[10px] font-black uppercase opacity-30 mb-4 tracking-widest">Tactical Sectors</p>
           <button onClick={() => setActiveGuildId('all')} className={`w-full text-left p-3 rounded-xl mb-2 font-black text-xs transition ${activeGuildId === 'all' ? activeTheme.button : 'hover:bg-slate-500/10'}`}>Global Feed</button>
-          
           <div className="mt-6 space-y-2">
-            <p className="text-[9px] font-black uppercase opacity-20 ml-2 mb-2 tracking-widest">Joined Sectors</p>
             {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
                 <div key={g.id} className="flex items-center gap-1 group">
-                    <button 
-                        onClick={() => setActiveGuildId(g.id)} 
-                        className={`flex-1 text-left p-3 rounded-xl font-bold text-xs transition truncate ${activeGuildId === g.id ? activeTheme.button : 'hover:bg-slate-500/10'}`}
-                    >
-                        {String(g.name)}
-                    </button>
-                    {/* SIDEBAR ROSTER BUTTON */}
-                    <button 
-                        onClick={() => setRosterGuild(g)}
-                        className="p-3 rounded-xl bg-slate-500/5 hover:bg-indigo-500 hover:text-white transition opacity-0 group-hover:opacity-100"
-                        title="View Roster"
-                    >
-                        <Users className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => setActiveGuildId(g.id)} className={`flex-1 text-left p-3 rounded-xl font-bold text-xs transition truncate ${activeGuildId === g.id ? activeTheme.button : 'hover:bg-slate-500/10'}`}>{String(g.name)}</button>
+                    <button onClick={() => setRosterGuild(g)} className="p-3 rounded-xl bg-slate-500/5 hover:bg-indigo-500 hover:text-white transition opacity-0 group-hover:opacity-100"><Users className="w-4 h-4" /></button>
                 </div>
             ))}
           </div>
-
           <button onClick={() => setIsGuildModalOpen(true)} className="w-full p-4 mt-6 rounded-xl border border-dashed border-slate-500/30 text-[10px] font-black uppercase opacity-40 hover:opacity-100 transition flex items-center justify-center gap-2"><Compass className="w-4 h-4" /> Find Sectors</button>
         </aside>
 
@@ -378,14 +398,12 @@ const App = () => {
                 <h2 className="text-5xl font-black uppercase italic tracking-tighter leading-none">{activeGuildId === 'all' ? 'The Hub' : guilds.find(g => g.id === activeGuildId)?.name}</h2>
                 <div className="flex gap-4">
                   <div className="relative group"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="text" placeholder="Filter..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className={`pl-10 pr-4 py-3 rounded-2xl ${activeTheme.card} border ${activeTheme.border} outline-none text-sm w-48 focus:border-indigo-500 transition`} /></div>
-                  <button onClick={() => setIsModalOpen(true)} className={`${activeTheme.button} px-8 py-3 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg active:scale-95 transition`}>+ New Mission</button>
+                  <button onClick={() => setIsModalOpen(true)} className={`${activeTheme.button} px-8 py-3 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg`}>+ New Mission</button>
                 </div>
               </div>
 
               <div className="space-y-12">
-                {Object.entries(filteredSessionsByDate).length === 0 ? (
-                    <div className="py-20 text-center opacity-20 border-2 border-dashed rounded-[3rem] border-slate-500/30"><Calendar className="mx-auto mb-4 w-12 h-12" /><p className="font-black uppercase tracking-widest text-xs italic">Sector Empty</p></div>
-                ) : Object.entries(filteredSessionsByDate).map(([date, daySessions]) => (
+                {Object.entries(filteredSessionsByDate).map(([date, daySessions]) => (
                   <div key={date}>
                     <div className="flex items-center gap-4 mb-8"><span className="text-[11px] font-black uppercase opacity-40 tracking-widest italic">{date}</span><div className={`flex-1 h-px ${activeTheme.border}`}></div></div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -396,51 +414,26 @@ const App = () => {
 
                         return (
                           <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:-translate-y-1 group relative overflow-hidden flex flex-col`}>
-                            {session.isStreaming && (
-                              <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-rose-600 text-white px-3 py-1 rounded-full animate-pulse shadow-lg">
-                                <Video className="w-3 h-3" />
-                                <span className="text-[9px] font-black uppercase tracking-widest">{session.streamPlatform} Live</span>
-                              </div>
-                            )}
-                            
+                            {session.isStreaming && <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-rose-600 text-white px-3 py-1 rounded-full animate-pulse shadow-lg"><Video className="w-3 h-3" /><span className="text-[9px] font-black uppercase tracking-widest">{session.streamPlatform} Live</span></div>}
                             <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors leading-tight mb-4">{String(session.gameTitle)}</h4>
-
-                            <div className="flex flex-wrap gap-4 mb-6">
-                              <div className="flex items-center gap-2 opacity-40">
-                                <Clock className="w-3 h-3" />
-                                <span className="text-[10px] font-black uppercase">{String(session.startTime)}</span>
-                              </div>
-                              <div className="flex items-center gap-2 opacity-40">
-                                <Timer className="w-3 h-3" />
-                                <span className="text-[10px] font-black uppercase">{session.duration} HR</span>
-                              </div>
+                            <div className="flex flex-wrap gap-4 mb-6 opacity-40">
+                              <div className="flex items-center gap-2"><Clock className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{String(session.startTime)}</span></div>
+                              <div className="flex items-center gap-2"><Timer className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{session.duration} HR</span></div>
                             </div>
-
                             <div className="mb-8 flex-1">
                                 <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-4">{session.participants?.length || 0} / {capacity} Enlisted</p>
                                 <div className="flex flex-wrap gap-2">
                                     {session.participants?.map((p, i) => (
-                                    <div key={i} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase shadow-sm`}>
+                                    <button key={i} onClick={() => openPublicProfile(p.uid)} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase shadow-sm hover:border-indigo-500 transition`}>
                                         <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
                                         {String(p.name)}
-                                    </div>
+                                    </button>
                                     ))}
                                 </div>
                             </div>
-                            
                             <div className="flex gap-3 mt-auto">
-                              <button 
-                                onClick={() => toggleJoinSession(session)} 
-                                disabled={isFull && !isEnlisted}
-                                className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition active:scale-95 ${isEnlisted ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : isFull ? 'bg-slate-500/10 text-slate-400 opacity-50 cursor-not-allowed' : activeTheme.button}`}
-                              >
-                                {isEnlisted ? 'Retire' : isFull ? 'Mission Full' : 'Enlist'}
-                              </button>
-                              {session.userId === user?.uid && (
-                                <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id))} className="p-4 rounded-2xl bg-rose-500/10 text-rose-500 transition opacity-20 hover:opacity-100">
-                                  <Trash2 className="w-5 h-5" />
-                                </button>
-                              )}
+                              <button onClick={() => toggleJoinSession(session)} disabled={isFull && !isEnlisted} className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition active:scale-95 ${isEnlisted ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : isFull ? 'bg-slate-500/10 text-slate-400 opacity-50 cursor-not-allowed' : activeTheme.button}`}>{isEnlisted ? 'Retire' : isFull ? 'Full' : 'Enlist'}</button>
+                              {session.userId === user?.uid && <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id))} className="p-4 rounded-2xl bg-rose-500/10 text-rose-500 transition opacity-20 hover:opacity-100"><Trash2 className="w-5 h-5" /></button>}
                             </div>
                           </div>
                         );
@@ -451,46 +444,112 @@ const App = () => {
               </div>
             </>
           ) : (
-            <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[5rem] p-16 text-center shadow-2xl max-w-2xl mx-auto`}>
-              <div className="w-32 h-32 mx-auto mb-10 rounded-[3rem] bg-indigo-600 flex items-center justify-center text-white text-6xl font-black shadow-2xl">{String(profile.displayName).charAt(0)}</div>
-              <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} onBlur={() => saveProfile(profile)} className="w-full bg-transparent text-center text-5xl font-black italic uppercase outline-none focus:text-indigo-600 transition mb-12" />
-              <div className="grid grid-cols-2 gap-6 pt-10 border-t border-slate-500/10">
-                <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`p-8 rounded-[2.5rem] border-2 transition ${profile.theme === 'light' ? 'border-indigo-600 bg-white shadow-xl' : 'border-transparent opacity-40 hover:opacity-100'}`}><Palette className="w-8 h-8 text-indigo-600" /></button>
-                <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`p-8 rounded-[2.5rem] border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400 bg-zinc-900 shadow-xl' : 'border-transparent opacity-40'}`}><Zap className="w-8 h-8 text-indigo-400" /></button>
+            <div className="max-w-4xl mx-auto pb-20">
+              <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[5rem] p-12 shadow-2xl relative overflow-hidden`}>
+                <div className="absolute top-0 left-0 w-full h-1 bg-indigo-600"></div>
+                <div className="flex flex-col md:flex-row gap-12">
+                    <div className="w-full md:w-1/3 text-center">
+                        <div className="w-32 h-32 mx-auto mb-8 rounded-[3rem] bg-indigo-600 flex items-center justify-center text-white text-5xl font-black shadow-2xl">{profile.displayName.charAt(0)}</div>
+                        <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} className="w-full bg-transparent text-center text-3xl font-black italic uppercase outline-none focus:text-indigo-600 transition" />
+                        <div className="mt-12 space-y-4">
+                            <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`w-full p-4 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4" /><span className="text-[10px] font-black uppercase">Standard</span></button>
+                            <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`w-full p-4 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4" /><span className="text-[10px] font-black uppercase">Midnight</span></button>
+                        </div>
+                        <button onClick={() => saveProfile(profile)} className={`w-full mt-10 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
+                            {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} SYNC PROFILE
+                        </button>
+                    </div>
+
+                    <div className="flex-1 space-y-10">
+                        <div>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Identity Matrix</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div className="relative"><LayoutGrid className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="STEAM" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.steam} onChange={e => setProfile({...profile, handles: {...profile.handles, steam: e.target.value}})} /></div>
+                                <div className="relative"><Gamepad2 className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="PSN" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} /></div>
+                                <div className="relative"><Gamepad className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="XBOX" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.xbox} onChange={e => setProfile({...profile, handles: {...profile.handles, xbox: e.target.value}})} /></div>
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Video className="w-3 h-3" /> Broadcast Hub</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div className="relative"><Tv className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="TWITCH" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.twitch} onChange={e => setProfile({...profile, handles: {...profile.handles, twitch: e.target.value}})} /></div>
+                                <div className="relative"><Youtube className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="YOUTUBE" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.youtube} onChange={e => setProfile({...profile, handles: {...profile.handles, youtube: e.target.value}})} /></div>
+                                <div className="relative"><ExternalLink className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="KICK" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.kick} onChange={e => setProfile({...profile, handles: {...profile.handles, kick: e.target.value}})} /></div>
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Target className="w-3 h-3" /> High Interest Showcase</p>
+                            <div className="space-y-3">
+                                {[0,1,2,3,4].map(idx => (
+                                    <input key={idx} placeholder={`GAME 0${idx+1}`} className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.showcaseGames?.[idx] || ''} onChange={e => {
+                                        const newGames = [...(profile.showcaseGames || ['', '', '', '', ''])];
+                                        newGames[idx] = e.target.value;
+                                        setProfile({...profile, showcaseGames: newGames});
+                                    }} />
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
               </div>
             </div>
           )}
         </div>
       </main>
 
-      {/* ROSTER MODAL: High-visibility intel deck */}
+      {/* PUBLIC INTEL DECK MODAL */}
+      {viewingProfile && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
+          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
+            <button onClick={() => setViewingProfile(null)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
+            <div className="text-center mb-10">
+                <div className="w-24 h-24 mx-auto mb-6 rounded-3xl bg-indigo-600 flex items-center justify-center text-white text-4xl font-black shadow-xl">{viewingProfile.displayName.charAt(0)}</div>
+                <h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3>
+                <p className="text-[10px] font-black uppercase opacity-30 mt-1">Registry Record</p>
+            </div>
+            <div className="grid grid-cols-3 gap-4 mb-10">
+                {Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (
+                    <div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center">
+                        <p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p>
+                        <p className="text-[9px] font-black uppercase truncate">{val}</p>
+                    </div>
+                ))}
+            </div>
+            <div className="space-y-2">
+                <p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>
+                {viewingProfile.showcaseGames?.map((game, idx) => game && (
+                    <div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4">
+                        <span className="text-[9px] font-black opacity-20">0{idx+1}</span>
+                        <span className="text-xs font-black uppercase tracking-tight italic">{game}</span>
+                    </div>
+                ))}
+            </div>
+            <button onClick={() => setViewingProfile(null)} className="w-full mt-10 py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Intel Deck</button>
+          </div>
+        </div>
+      )}
+
+      {/* ROSTER MODAL */}
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10">
-                <div>
-                    <h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>
-                    <p className="text-[10px] font-black uppercase opacity-30 mt-2 tracking-widest">Active Personnel Intel</p>
-                </div>
-                <button onClick={() => setRosterGuild(null)} className="w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
+                <h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>
+                <button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button>
             </div>
-            
             <div className="space-y-3 max-h-[50vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
                 {rosterGuild.members?.map((m, idx) => (
-                    <div key={idx} className={`${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4`}>
-                        <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white">
-                            {String(m.name || 'O').charAt(0)}
-                        </div>
+                    <button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}>
+                        <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white shadow-lg group-hover:scale-110 transition">{String(m.name || 'O').charAt(0)}</div>
                         <div className="flex-1 overflow-hidden">
                             <p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p>
-                            <p className="text-[8px] opacity-20 font-bold uppercase truncate">{m.uid || m}</p>
+                            <p className="text-[8px] opacity-20 font-bold truncate">{m.uid || m}</p>
                         </div>
                         {(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}
-                    </div>
+                    </button>
                 ))}
             </div>
-            
-            <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest transition shadow-xl active:scale-95">Close Deck</button>
+            <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest transition">Close Roster</button>
           </div>
         </div>
       )}
@@ -514,17 +573,15 @@ const App = () => {
                         <button onClick={() => handleToggleGuild(g)} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition active:scale-95 ${profile.joinedGuilds?.includes(g.id) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>
                           {profile.joinedGuilds?.includes(g.id) ? 'Retire' : 'Enlist'}
                         </button>
-                        {g.ownerId === user?.uid && (
-                          <button onClick={() => disbandGuild(g.id)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white"><Skull className="w-4 h-4" /></button>
-                        )}
+                        {g.ownerId === user?.uid && <button onClick={() => disbandGuild(g.id)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white"><Skull className="w-4 h-4" /></button>}
                     </div>
                 </div>
               ))}
             </div>
             <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
-              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">New Tactical Sector</p>
+              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Registry</p>
               <input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} />
-              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button>
+              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Sector</button>
             </div>
           </div>
         </div>
@@ -540,36 +597,21 @@ const App = () => {
             </div>
             <form onSubmit={handleSubmitSession} className="space-y-6">
               <input placeholder="GAME / OPERATION NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
-              
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
                 <input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
-                <div className="relative">
-                    <Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
-                    <input type="number" placeholder="HR" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} />
-                </div>
+                <div className="relative"><Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="HR" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} /></div>
               </div>
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
-                    <option value="">Select Guild</option>
-                    {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
-                    <option key={g.id} value={g.id}>{String(g.name)}</option>
-                    ))}
+                    <option value="">Select Guild</option>{guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (<option key={g.id} value={g.id}>{String(g.name)}</option>))}
                 </select>
-                <div className="relative">
-                    <UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
-                    <input type="number" placeholder="SLOTS" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} />
-                </div>
+                <div className="relative"><UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="SLOTS" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} /></div>
               </div>
-
               <div className={`${activeTheme.bg} p-6 rounded-3xl border ${activeTheme.border} flex items-center justify-between`}>
                 <div className="flex items-center gap-4"><Video className="w-5 h-5 opacity-40" /><div><p className="text-[11px] font-black uppercase tracking-widest">Broadcast Mission</p></div></div>
-                <button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}>
-                    <div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div>
-                </button>
+                <button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}><div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div></button>
               </div>
-
               <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Deploy Mission</button>
             </form>
           </div>
