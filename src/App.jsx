@@ -9,6 +9,7 @@ import {
   deleteDoc, 
   doc, 
   setDoc,
+  getDoc,
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
@@ -47,7 +48,8 @@ import {
   AlertTriangle,
   Copy,
   Check,
-  Terminal
+  Terminal,
+  ChevronRight
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
@@ -60,7 +62,6 @@ const manualFirebaseConfig = {
   appId: "1:209595978385:web:804bf3167a353073be2530"
 };
 
-// --- ENVIRONMENT HANDLING ---
 const getFirebaseConfig = () => {
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
     try {
@@ -78,7 +79,6 @@ const isConfigValid = !!(firebaseConfig && firebaseConfig.apiKey && firebaseConf
 const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'community-calendar-production';
 const appId = rawAppId.replace(/[^a-zA-Z0-9]/g, '_'); 
 
-// Initialize Firebase safely
 let app, auth, db;
 if (isConfigValid) {
   try {
@@ -90,32 +90,12 @@ if (isConfigValid) {
   }
 }
 
-const MOCK_ADMIN_DATA = {
-  displayName: 'New Player',
-  bio: 'Gaming community member.',
-  favoriteGames: [],
-  joinedGuilds: [],
-  isAdmin: false,
-  theme: 'light',
-  photoUrl: ''
-};
-
-const ACHIEVEMENT_LIST = [
-  { id: 'first_step', name: 'First Step', desc: 'Join your first guild.', icon: <Shield className="w-5 h-5" /> },
-  { id: 'guild_founder', name: 'Guild Founder', desc: 'Create a community.', icon: <Crown className="w-5 h-5" /> },
-  { id: 'party_member', name: 'Party Member', desc: 'Join a gaming session.', icon: <Users className="w-5 h-5" /> },
-  { id: 'organizer', name: 'Organizer', desc: 'Host a session.', icon: <Calendar className="w-5 h-5" /> }
-];
-
 const THEMES = {
   light: {
     id: 'light',
-    name: 'Standard Light',
     bg: 'bg-slate-50',
     card: 'bg-white',
     header: 'bg-white',
-    sidebar: 'bg-white',
-    primary: 'bg-indigo-600',
     accent: 'text-indigo-600',
     border: 'border-slate-100',
     text: 'text-slate-900',
@@ -124,12 +104,9 @@ const THEMES = {
   },
   dark: {
     id: 'dark',
-    name: 'Deep Dark',
     bg: 'bg-zinc-950',
     card: 'bg-zinc-900',
     header: 'bg-zinc-900',
-    sidebar: 'bg-zinc-900',
-    primary: 'bg-indigo-500',
     accent: 'text-indigo-400',
     border: 'border-zinc-800',
     text: 'text-zinc-100',
@@ -150,8 +127,13 @@ const App = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [permissionError, setPermissionError] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [newGuild, setNewGuild] = useState({ name: '', desc: '' });
 
-  const [profile, setProfile] = useState(MOCK_ADMIN_DATA);
+  const [profile, setProfile] = useState({
+    displayName: 'New Player',
+    joinedGuilds: [],
+    theme: 'light'
+  });
 
   const activeTheme = THEMES[profile.theme] || THEMES.light;
 
@@ -162,8 +144,6 @@ const App = () => {
     endTime: '21:00',
     guildId: ''
   });
-
-  const [newGuild, setNewGuild] = useState({ name: '', desc: '' });
 
   useEffect(() => {
     if (!isConfigValid || !auth) return;
@@ -193,11 +173,23 @@ const App = () => {
     if (!user || !db) return;
 
     const handleListenerError = (err) => {
-      console.warn("Firestore listener error:", err.code);
-      if (err.code === 'permission-denied') {
-        setPermissionError(true);
+      if (err.code === 'permission-denied') setPermissionError(true);
+    };
+
+    // Auto-initialize profile if it doesn't exist
+    const checkProfile = async () => {
+      const pRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
+      const snap = await getDoc(pRef);
+      if (!snap.exists()) {
+        await setDoc(pRef, {
+          displayName: `Player_${user.uid.slice(0, 4)}`,
+          joinedGuilds: [],
+          theme: 'light',
+          createdAt: serverTimestamp()
+        });
       }
     };
+    checkProfile();
 
     const unsubSessions = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'), (snapshot) => {
       setSessions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -215,12 +207,27 @@ const App = () => {
     return () => { unsubSessions(); unsubGuilds(); unsubProfile(); };
   }, [user]);
 
-  const handleLogout = () => auth && signOut(auth);
-
   const saveProfile = async (data) => {
     if (!user || !db) return;
     try {
       await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'), data, { merge: true });
+    } catch (e) {
+      if (e.code === 'permission-denied') setPermissionError(true);
+    }
+  };
+
+  const createGuild = async () => {
+    if (!newGuild.name || !user || !db) return;
+    try {
+      const gRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'guilds'), {
+        ...newGuild,
+        ownerId: user.uid,
+        createdAt: serverTimestamp()
+      });
+      const updatedJoined = [...(profile.joinedGuilds || []), gRef.id];
+      await saveProfile({ ...profile, joinedGuilds: updatedJoined });
+      setNewGuild({ name: '', desc: '' });
+      setIsGuildModalOpen(false);
     } catch (e) {
       if (e.code === 'permission-denied') setPermissionError(true);
     }
@@ -292,9 +299,7 @@ const App = () => {
     textArea.value = text;
     textArea.style.position = "fixed";
     textArea.style.left = "-9999px";
-    textArea.style.top = "0";
     document.body.appendChild(textArea);
-    textArea.focus();
     textArea.select();
     try {
       document.execCommand('copy');
@@ -310,72 +315,23 @@ const App = () => {
     <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center">
       <Shield className="w-16 h-16 text-amber-500 mb-6" />
       <h2 className="text-3xl font-black uppercase italic mb-4">Configuration Required</h2>
-      <p className="text-slate-400 mb-8 max-w-md font-medium">
-        Paste your project keys into <code className="bg-black px-2 py-1 rounded text-indigo-400">community-calendar.jsx</code> to enable data syncing.
-      </p>
-      <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="bg-indigo-600 hover:bg-indigo-700 text-white font-black px-8 py-4 rounded-2xl uppercase text-xs tracking-widest transition shadow-lg shadow-indigo-600/20">
-        Open Firebase Console
-      </a>
+      <p className="text-slate-400 mb-8 max-w-md font-medium">Paste your Firebase keys into <code className="bg-black px-2 py-1 rounded text-indigo-400">src/App.jsx</code>.</p>
     </div>
   );
 
   if (permissionError) {
-    const universalRules = `service cloud.firestore {
-  match /databases/{database}/documents {
-    match /artifacts/{anyId}/{document=**} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}`;
-
+    const universalRules = `service cloud.firestore {\n  match /databases/{database}/documents {\n    match /artifacts/{anyId}/{document=**} {\n      allow read, write: if request.auth != null;\n    }\n  }\n}`;
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white">
         <div className="bg-slate-800 p-10 rounded-[3rem] border border-slate-700 max-w-2xl shadow-2xl w-full">
           <div className="flex items-center gap-4 mb-8">
             <Lock className="w-12 h-12 text-rose-500" />
-            <div>
-              <h2 className="text-3xl font-black uppercase tracking-tighter italic leading-none">Permission Denied</h2>
-              <p className="text-rose-400 text-[10px] font-black uppercase tracking-widest mt-2">Action Required: Update Firestore Rules</p>
-            </div>
+            <h2 className="text-3xl font-black uppercase tracking-tighter italic">Permission Denied</h2>
           </div>
-          
-          <p className="text-slate-300 mb-6 font-medium leading-relaxed">
-            The previous specific ID rule failed because the <span className="text-indigo-400 italic font-bold">appId</span> has changed. You must use the <span className="text-indigo-400 italic font-bold">Universal Rule</span> below to prevent this from happening again.
-          </p>
-
-          <div className="space-y-4 mb-8">
-            <div className="flex justify-between items-center">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-2">
-                <Terminal className="w-3 h-3" /> Copy this code:
-              </p>
-              <button 
-                onClick={() => copyToClipboard(universalRules)}
-                className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-indigo-400 hover:text-indigo-300 transition"
-              >
-                {copied ? <><Check className="w-3 h-3" /> Copied!</> : <><Copy className="w-3 h-3" /> Copy Universal Rules</>}
-              </button>
-            </div>
-            <pre className="bg-slate-950 p-6 rounded-2xl text-[11px] text-emerald-400 font-mono overflow-x-auto border border-slate-700 leading-relaxed shadow-inner">
-              {universalRules}
-            </pre>
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-4">
-            <a 
-              href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/rules`} 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-5 rounded-2xl uppercase text-xs tracking-widest transition shadow-lg shadow-indigo-600/20"
-            >
-              Open Rules Tab <ExternalLink className="w-4 h-4" />
-            </a>
-            <button 
-              onClick={() => window.location.reload()} 
-              className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-black py-5 rounded-2xl uppercase text-xs tracking-widest transition"
-            >
-              I've Updated Rules
-            </button>
-          </div>
+          <p className="text-slate-300 mb-6">Update your Firestore Rules with this code:</p>
+          <pre className="bg-slate-950 p-6 rounded-2xl text-[11px] text-emerald-400 font-mono overflow-x-auto border border-slate-700 mb-8">{universalRules}</pre>
+          <button onClick={() => copyToClipboard(universalRules)} className="w-full bg-indigo-600 py-4 rounded-2xl font-black uppercase text-xs tracking-widest">{copied ? 'Copied!' : 'Copy Rules'}</button>
+          <button onClick={() => window.location.reload()} className="w-full mt-4 bg-slate-700 py-4 rounded-2xl font-black uppercase text-xs tracking-widest">Retry Connection</button>
         </div>
       </div>
     );
@@ -394,7 +350,7 @@ const App = () => {
           <nav className="flex items-center gap-3">
             <button onClick={() => setCurrentView('calendar')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'calendar' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Board</button>
             <button onClick={() => setCurrentView('profile')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'profile' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Profile</button>
-            <button onClick={handleLogout} className="p-2 opacity-40 hover:opacity-100 transition hover:text-rose-500"><LogOut className="w-4 h-4" /></button>
+            <button onClick={() => auth && signOut(auth)} className="p-2 opacity-40 hover:opacity-100 transition hover:text-rose-500"><LogOut className="w-4 h-4" /></button>
           </nav>
         </div>
       </header>
@@ -424,10 +380,10 @@ const App = () => {
                 </div>
                 <div className="flex gap-4">
                   <div className="relative group">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 group-focus-within:opacity-100 transition" />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30 transition" />
                     <input type="text" placeholder="Filter games..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className={`pl-10 pr-4 py-3 rounded-2xl ${activeTheme.card} border ${activeTheme.border} outline-none text-sm w-64 focus:border-indigo-500 transition`} />
                   </div>
-                  <button onClick={() => setIsModalOpen(true)} className={`${activeTheme.button} px-8 py-3 rounded-2xl font-black uppercase text-xs tracking-widest transition shadow-lg shadow-indigo-600/20 active:scale-95`}>+ New Lobby</button>
+                  <button onClick={() => setIsModalOpen(true)} className={`${activeTheme.button} px-8 py-3 rounded-2xl font-black uppercase text-xs tracking-widest transition shadow-lg`}>+ New Lobby</button>
                 </div>
               </div>
 
@@ -435,7 +391,7 @@ const App = () => {
                 {Object.entries(filteredSessionsByDate).length === 0 ? (
                   <div className={`py-24 text-center opacity-30 border-2 border-dashed ${activeTheme.border} rounded-[4rem]`}>
                     <Calendar className="w-16 h-16 mx-auto mb-6" />
-                    <p className="font-black uppercase tracking-[0.3em] text-xs italic">Sector Empty - No active sessions</p>
+                    <p className="font-black uppercase tracking-widest text-xs italic">Sector Empty - No active sessions</p>
                   </div>
                 ) : Object.entries(filteredSessionsByDate).map(([date, daySessions]) => (
                   <div key={date}>
@@ -445,7 +401,33 @@ const App = () => {
                     </div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                       {daySessions.map(session => (
-                        <SessionCard key={session.id} session={session} user={user} activeTheme={activeTheme} onJoin={() => toggleJoinSession(session)} onDelete={() => deleteSession(session.id)} />
+                        <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:shadow-2xl hover:-translate-y-1 group`}>
+                          <div className="flex justify-between items-start mb-6">
+                            <h4 className="text-2xl font-black italic uppercase leading-none group-hover:text-indigo-600 transition-colors">{String(session.gameTitle)}</h4>
+                            <div className="flex items-center gap-2 opacity-40">
+                              <Clock className="w-3 h-3" />
+                              <span className="text-[10px] font-black uppercase tracking-widest">{String(session.startTime)}</span>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2 mb-10">
+                            {session.participants?.map((p, i) => (
+                              <div key={i} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase`}>
+                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
+                                {String(p.name)}
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex gap-4">
+                            <button onClick={() => toggleJoinSession(session)} className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition active:scale-95 ${session.participants?.some(p => p.uid === user?.uid) ? 'bg-rose-500/10 text-rose-500' : activeTheme.button}`}>
+                              {session.participants?.some(p => p.uid === user?.uid) ? 'Leave Operation' : 'Join Quest'}
+                            </button>
+                            {session.userId === user?.uid && (
+                              <button onClick={() => deleteSession(session.id)} className="p-4 rounded-2xl bg-slate-100 dark:bg-zinc-800 opacity-40 hover:opacity-100 hover:text-rose-500 transition">
+                                <Trash2 className="w-5 h-5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -453,7 +435,34 @@ const App = () => {
               </div>
             </>
           ) : (
-            <ProfileView profile={profile} activeTheme={activeTheme} />
+            <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[5rem] p-16 text-center relative overflow-hidden shadow-2xl`}>
+              <div className="absolute top-0 left-0 w-full h-40 bg-indigo-600/5 border-b border-indigo-600/5"></div>
+              <div className="relative pt-8">
+                <div className={`${activeTheme.primary} w-40 h-40 mx-auto mb-8 rounded-[3rem] flex items-center justify-center text-white text-6xl font-black shadow-2xl ring-8 ring-white dark:ring-zinc-900`}>{String(profile.displayName).charAt(0)}</div>
+                
+                <div className="space-y-4 max-w-sm mx-auto mb-12">
+                  <label className="text-[10px] font-black uppercase opacity-30 tracking-widest">Operator Name</label>
+                  <input 
+                    type="text" 
+                    value={profile.displayName} 
+                    onChange={e => setProfile({...profile, displayName: e.target.value})}
+                    onBlur={() => saveProfile(profile)}
+                    className="w-full bg-transparent text-center text-5xl font-black italic uppercase tracking-tighter outline-none focus:text-indigo-600 transition leading-none"
+                  />
+                </div>
+                
+                <div className="mt-16 flex justify-center gap-6">
+                  <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`flex flex-col items-center gap-4 p-6 rounded-[2.5rem] border-2 transition ${profile.theme === 'light' ? 'border-indigo-600 bg-white' : 'border-transparent opacity-40'}`}>
+                    <Palette className="w-8 h-8 text-indigo-600" />
+                    <span className="text-[10px] font-black uppercase">Standard</span>
+                  </button>
+                  <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`flex flex-col items-center gap-4 p-6 rounded-[2.5rem] border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400 bg-zinc-900' : 'border-transparent opacity-40'}`}>
+                    <Zap className="w-8 h-8 text-indigo-400" />
+                    <span className="text-[10px] font-black uppercase">Midnight</span>
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </main>
       </div>
@@ -463,17 +472,17 @@ const App = () => {
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10">
               <div>
-                <h3 className="text-4xl font-black uppercase italic tracking-tighter leading-none">Guild Network</h3>
+                <h3 className="text-4xl font-black uppercase italic tracking-tighter">Guild Network</h3>
                 <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mt-3">Expand your community reach</p>
               </div>
               <button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-100 dark:bg-zinc-800 opacity-60 hover:opacity-100 transition hover:rotate-90">✕</button>
             </div>
-            <div className="space-y-4 max-h-[50vh] overflow-y-auto mb-10 pr-2">
+            <div className="space-y-4 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
               {guilds.map(g => (
-                <div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center transition hover:border-indigo-500/50 group`}>
+                <div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center transition group`}>
                   <div>
                     <p className="font-black uppercase tracking-tight text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>
-                    <p className="text-[10px] opacity-40 font-bold uppercase mt-1 tracking-tight">{String(g.description || 'Public Strategic Hub')}</p>
+                    <p className="text-[10px] opacity-40 font-bold uppercase mt-1 tracking-tight">{String(g.desc || 'Public Strategic Hub')}</p>
                   </div>
                   <button onClick={async () => {
                     const joined = profile.joinedGuilds || [];
@@ -485,6 +494,23 @@ const App = () => {
                 </div>
               ))}
             </div>
+            
+            <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-40 text-center mb-2">Register a New Command Center</p>
+              <input 
+                placeholder="GUILD NAME (e.g. PC MASTERRACE)" 
+                className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition`} 
+                value={newGuild.name} 
+                onChange={e => setNewGuild({...newGuild, name: e.target.value})} 
+              />
+              <input 
+                placeholder="DESCRIPTION" 
+                className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition`} 
+                value={newGuild.desc} 
+                onChange={e => setNewGuild({...newGuild, desc: e.target.value})} 
+              />
+              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Initialize Guild Deployment</button>
+            </div>
           </div>
         </div>
       )}
@@ -494,36 +520,24 @@ const App = () => {
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-lg w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10">
               <div>
-                <h3 className="text-4xl font-black uppercase italic tracking-tighter leading-none">New Lobby</h3>
+                <h3 className="text-4xl font-black uppercase italic tracking-tighter">New Lobby</h3>
                 <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mt-3">Summon your vanguard team</p>
               </div>
               <button onClick={() => setIsModalOpen(false)} className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-100 dark:bg-zinc-800 opacity-60 hover:opacity-100 transition hover:rotate-90">✕</button>
             </div>
             <form onSubmit={handleSubmitSession} className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-4">Primary Objective</label>
-                <input placeholder="GAME TITLE / OPERATION" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
-              </div>
+              <input placeholder="GAME TITLE / OPERATION" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
               <div className="grid grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-4">Deployment Date</label>
-                  <input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black focus:border-indigo-500 transition`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-4">Launch Time (EST)</label>
-                  <input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black focus:border-indigo-500 transition`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
-                </div>
+                <input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black focus:border-indigo-500 transition`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
+                <input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black focus:border-indigo-500 transition`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
               </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-4">Command Guild</label>
-                <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
-                  <option value="">Select Command Center</option>
-                  {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
-                    <option key={g.id} value={g.id}>{String(g.name)}</option>
-                  ))}
-                </select>
-              </div>
-              <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl shadow-indigo-600/20 active:scale-95 transition mt-4`}>Establish Deployment</button>
+              <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
+                <option value="">Select Command Center</option>
+                {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
+                  <option key={g.id} value={g.id}>{String(g.name)}</option>
+                ))}
+              </select>
+              <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Establish Deployment</button>
             </form>
           </div>
         </div>
@@ -531,53 +545,5 @@ const App = () => {
     </div>
   );
 };
-
-const SessionCard = ({ session, user, onJoin, onDelete, activeTheme }) => {
-  const participants = session.participants || [];
-  const isJoined = user && participants.some(p => p.uid === user.uid);
-  const isHost = user && session.userId === user.uid;
-  return (
-    <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 group`}>
-      <div className="flex justify-between items-start mb-6">
-        <div>
-          <h4 className="text-2xl font-black italic uppercase leading-none group-hover:text-indigo-600 transition-colors">{String(session.gameTitle)}</h4>
-          <div className="flex items-center gap-2 mt-3 opacity-40">
-            <Clock className="w-3 h-3" />
-            <span className="text-[10px] font-black uppercase tracking-widest">{String(session.startTime)} EST</span>
-          </div>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-2 mb-10">
-        {participants.map((p, i) => (
-          <div key={i} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase transition hover:border-emerald-500/50`}>
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
-            {String(p.name)}
-          </div>
-        ))}
-      </div>
-      <div className="flex gap-4">
-        <button onClick={onJoin} className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition active:scale-95 ${isJoined ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20 shadow-lg shadow-rose-500/5' : activeTheme.button + ' shadow-lg shadow-indigo-600/10'}`}>
-          {isJoined ? 'Leave Operation' : 'Join Quest'}
-        </button>
-        {isHost && (
-          <button onClick={onDelete} className="p-4 rounded-2xl bg-slate-100 dark:bg-zinc-800 opacity-40 hover:opacity-100 hover:text-rose-500 transition active:scale-90">
-            <Trash2 className="w-5 h-5" />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const ProfileView = ({ profile, activeTheme }) => (
-  <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[5rem] p-16 text-center relative overflow-hidden shadow-2xl`}>
-    <div className="absolute top-0 left-0 w-full h-40 bg-indigo-600/5 border-b border-indigo-600/5"></div>
-    <div className="relative pt-8">
-      <div className={`${activeTheme.primary} w-40 h-40 mx-auto mb-8 rounded-[3rem] flex items-center justify-center text-white text-6xl font-black shadow-2xl shadow-indigo-600/30 ring-8 ring-white dark:ring-zinc-900`}>{String(profile.displayName).charAt(0)}</div>
-      <h2 className="text-5xl font-black italic uppercase tracking-tighter mb-2 leading-none">{String(profile.displayName)}</h2>
-      <p className="text-[11px] font-black uppercase opacity-30 tracking-[0.5em] mb-12 italic">Elite Vanguard Member</p>
-    </div>
-  </div>
-);
 
 export default App;
