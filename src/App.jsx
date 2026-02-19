@@ -49,12 +49,12 @@ import {
 // --- PRODUCTION CONFIGURATION ---
 // IMPORTANT: Paste your real keys here!
 const manualFirebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDFHW-ZV5HPxGNJlwbi4Ravrs0tnyRW3Eg",
+  authDomain: "gamesync-7fdde.firebaseapp.com",
+  projectId: "gamesync-7fdde",
+  storageBucket: "gamesync-7fdde.firebasestorage.app",
+  messagingSenderId: "209595978385",
+  appId: "1:209595978385:web:804bf3167a353073be2530"
 };
 
 const getFirebaseConfig = () => {
