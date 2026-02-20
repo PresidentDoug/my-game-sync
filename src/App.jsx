@@ -173,6 +173,7 @@ const App = () => {
       return;
     }
     const unsubscribe = onAuthStateChanged(auth, (u) => {
+      // Keep the raw user object to maintain prototype methods like getIdToken
       setUser(u);
       setAuthLoading(false);
     });
@@ -229,17 +230,23 @@ const App = () => {
   };
 
   const checkVerification = async () => {
-    if (!user) return;
+    if (!auth.currentUser) return;
     setIsVerifying(true);
-    await reload(user);
-    setUser({ ...auth.currentUser });
-    setIsVerifying(false);
+    try {
+      // Using auth.currentUser directly ensures we have the latest instance
+      await reload(auth.currentUser);
+      setUser(auth.currentUser);
+    } catch (err) {
+      setAuthError("SYNC FAILED: Try again in a moment.");
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   const resendVerification = async () => {
-    if (!user) return;
+    if (!auth.currentUser) return;
     try {
-        await sendEmailVerification(user);
+        await sendEmailVerification(auth.currentUser);
         setAuthError("NEW VERIFICATION LINK TRANSMITTED");
     } catch (err) {
         setAuthError(err.message);
@@ -330,9 +337,16 @@ const App = () => {
     await deleteGuildSessions(gId);
   };
 
+  const generateInviteCode = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+    return code;
+  };
+
   const createGuild = async () => {
     if (!newGuild.name || !user || !db) return;
-    const inviteCode = newGuild.isPrivate ? Math.random().toString(36).substring(2, 8).toUpperCase() : null;
+    const inviteCode = newGuild.isPrivate ? generateInviteCode() : null;
     const gRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'guilds'), { 
       name: newGuild.name, desc: newGuild.desc || "Active Tactical Sector", ownerId: user.uid, 
       members: [{ uid: user.uid, name: profile.displayName }], isPrivate: newGuild.isPrivate, inviteCode, createdAt: serverTimestamp() 
@@ -352,7 +366,9 @@ const App = () => {
     if (!guildToJoin) { setInviteError("INVALID SECTOR CODE"); return; }
     if (profile.joinedGuilds?.includes(guildToJoin.id)) { setInviteError("ALREADY ENLISTED"); return; }
     await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), guildToJoin.id] });
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName }) });
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), {
+      members: arrayUnion({ uid: user.uid, name: profile.displayName })
+    });
     setInviteInput('');
     setActiveGuildId(guildToJoin.id);
   };
@@ -493,7 +509,7 @@ const App = () => {
       <main className="max-w-7xl mx-auto p-8 flex flex-col md:flex-row gap-8">
         <aside className="w-full md:w-72">
           <p className="text-[10px] font-black uppercase opacity-30 mb-4 tracking-widest">Tactical Sectors</p>
-          <button onClick={() => setActiveGuildId('all')} className={`w-full text-left p-3 rounded-xl mb-2 font-black text-xs transition ${activeGuildId === 'all' ? activeTheme.button : 'hover:bg-slate-500/10'}`}>Global Comms</button>
+          <button onClick={() => setActiveGuildId('all')} className={`w-full text-left p-3 rounded-xl mb-2 font-black text-xs transition ${activeGuildId === 'all' ? activeTheme.button : 'hover:bg-slate-500/10'}`}>Global Feed</button>
           <div className="mt-6 space-y-2">
             {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
                 <div key={g.id} className="flex items-center gap-1 group">
@@ -612,7 +628,7 @@ const App = () => {
         </div>
       </main>
 
-      {/* FEEDBACK MODAL */}
+      {/* MODALS */}
       {isFeedbackModalOpen && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
@@ -634,7 +650,6 @@ const App = () => {
         </div>
       )}
 
-      {/* PUBLIC INTEL DECK (Profile Viewer) */}
       {viewingProfile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
           <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
@@ -659,7 +674,6 @@ const App = () => {
         </div>
       )}
 
-      {/* ROSTER MODAL */}
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
@@ -689,7 +703,6 @@ const App = () => {
         </div>
       )}
 
-      {/* GUILD DIRECTORY MODAL */}
       {isGuildModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
