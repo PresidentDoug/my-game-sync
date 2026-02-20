@@ -545,7 +545,7 @@ const App = () => {
                           <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors mb-4">{String(session.gameTitle)}</h4>
                           <div className="flex flex-wrap gap-4 mb-6 opacity-40"><div className="flex items-center gap-2"><Clock className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{String(session.startTime)}</span></div><div className="flex items-center gap-2"><Timer className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{session.duration} HR</span></div></div>
                           <div className="mb-8 flex-1">
-                            <p className="text-[10px] font-black uppercase opacity-60 mb-4">{session.participants?.length || 0} / {(Number(session.maxOpenings) || 0) + 1} Enlisted</p>
+                            <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-4">{session.participants?.length || 0} / {(Number(session.maxOpenings) || 0) + 1} Enlisted</p>
                             <div className="flex flex-wrap gap-2">{session.participants?.map((p, i) => (<button key={i} onClick={() => openPublicProfile(p.uid)} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase shadow-sm hover:border-indigo-500 transition`}><div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>{String(p.name)}</button>))}</div>
                           </div>
                           <div className="flex gap-3 mt-auto">
@@ -580,15 +580,23 @@ const App = () => {
                     </div>
                     <div className="flex-1 space-y-10">
                         <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Lock className="w-3 h-3 inline mr-2" /> Identity Matrix</p>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Lock className="w-3 h-3 inline mr-2" /> Identity Handles</p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <input placeholder="STEAM" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.steam} onChange={e => setProfile({...profile, handles: {...profile.handles, steam: e.target.value}})} />
-                                <input placeholder="PSN" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} />
-                                <input placeholder="XBOX" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.xbox} onChange={e => setProfile({...profile, handles: {...profile.handles, xbox: e.target.value}})} />
+                                <input placeholder="STEAM" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.steam} onChange={e => setProfile({...profile, handles: {...profile.handles, steam: e.target.value}})} />
+                                <input placeholder="PSN" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} />
+                                <input placeholder="XBOX" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.xbox} onChange={e => setProfile({...profile, handles: {...profile.handles, xbox: e.target.value}})} />
                             </div>
                         </div>
                         <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Target className="w-3 h-3 inline mr-2" /> Showcase</p>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Video className="w-3 h-3 inline mr-2" /> Broadcast Hub</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <input placeholder="TWITCH" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.twitch} onChange={e => setProfile({...profile, handles: {...profile.handles, twitch: e.target.value}})} />
+                                <input placeholder="YOUTUBE" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.youtube} onChange={e => setProfile({...profile, handles: {...profile.handles, youtube: e.target.value}})} />
+                                <input placeholder="KICK" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.kick} onChange={e => setProfile({...profile, handles: {...profile.handles, kick: e.target.value}})} />
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Target className="w-3 h-3 inline mr-2" /> Interest Showcase</p>
                             <div className="space-y-3">{[0,1,2,3,4].map(idx => (<input key={idx} placeholder={`GAME 0${idx+1}`} className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.showcaseGames?.[idx] || ''} onChange={e => { const newGames = [...(profile.showcaseGames || ['', '', '', '', ''])]; newGames[idx] = e.target.value; setProfile({...profile, showcaseGames: newGames}); }} />))}</div>
                         </div>
                     </div>
@@ -654,7 +662,7 @@ const App = () => {
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-6"><div><h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>{rosterGuild.isPrivate && (<div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl"><div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div><button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button></div>)}</div><button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button></div>
             <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{rosterGuild.members?.map((m, idx) => (<button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}><div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white shadow-lg group-hover:scale-110 transition">{String(m.name || 'O').charAt(0)}</div><div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>{(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}</button>))}</div>
-            <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Deck</button>
+            <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Roster</button>
           </div>
         </div>
       )}
