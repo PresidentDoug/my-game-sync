@@ -73,14 +73,46 @@ import {
   Bell,
   Check,
   UserX,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Sparkles
 } from 'lucide-react';
 
 // --- CONFIGURATION & THEMES ---
-// ALWAYS AT THE TOP TO PREVENT REFERENCE ERRORS
+// Moving this to the absolute top to ensure no ReferenceErrors occur during component mounting
 const THEMES = {
-  light: { id: 'light', bg: 'bg-slate-50', card: 'bg-white', header: 'bg-white', accent: 'text-indigo-600', border: 'border-slate-100', text: 'text-slate-900', muted: 'text-slate-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' },
-  dark: { id: 'dark', bg: 'bg-zinc-950', card: 'bg-zinc-900', header: 'bg-zinc-900', accent: 'text-indigo-400', border: 'border-zinc-800', text: 'text-zinc-100', muted: 'text-zinc-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' }
+  light: { 
+    id: 'light', 
+    bg: 'bg-slate-50', 
+    card: 'bg-white', 
+    header: 'bg-white', 
+    accent: 'text-indigo-600', 
+    border: 'border-slate-100', 
+    text: 'text-slate-900', 
+    muted: 'text-slate-500', 
+    button: 'bg-indigo-600 hover:bg-indigo-700 text-white' 
+  },
+  dark: { 
+    id: 'dark', 
+    bg: 'bg-zinc-950', 
+    card: 'bg-zinc-900', 
+    header: 'bg-zinc-900', 
+    accent: 'text-indigo-400', 
+    border: 'border-zinc-800', 
+    text: 'text-zinc-100', 
+    muted: 'text-zinc-500', 
+    button: 'bg-indigo-600 hover:bg-indigo-700 text-white' 
+  },
+  neon: { 
+    id: 'neon', 
+    bg: 'bg-[#050505]', 
+    card: 'bg-[#121212]', 
+    header: 'bg-[#000000]', 
+    accent: 'text-cyan-400', 
+    border: 'border-fuchsia-500/20', 
+    text: 'text-white', 
+    muted: 'text-fuchsia-300/50', 
+    button: 'bg-fuchsia-600 hover:bg-fuchsia-500 text-white shadow-[0_0_15px_rgba(192,38,211,0.4)]' 
+  }
 };
 
 const SUPPORT_EMAIL = "your-email@example.com";
@@ -126,8 +158,7 @@ const Avatar = ({ src, name, size = "md", className = "" }) => {
         xl: "w-32 h-32 text-4xl"
     };
     
-    // Safety check: ensure name is string for charAt
-    const safeName = String(name || 'O');
+    const safeName = typeof name === 'string' ? name : 'Operator';
     
     if (src && typeof src === 'string' && src.startsWith('http')) {
         return <img src={src} alt={safeName} className={`${sizeClasses[size]} rounded-2xl object-cover border border-white/10 shadow-md ${className}`} onError={(e) => { e.target.src = ''; e.target.onerror = null; }} />;
@@ -243,7 +274,6 @@ const App = () => {
       if (snap.exists()) setProfile(prev => ({ ...prev, ...snap.data() }));
     });
     
-    // NOTIFICATION LISTENER: Now points to public collection and filters locally (Rule 2)
     const unsubNotifs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'notifications'), (snap) => {
         const list = snap.docs
             .map(d => ({ id: d.id, ...d.data() }))
@@ -349,7 +379,6 @@ const App = () => {
 
   const sendFriendRequest = async (targetUser) => {
     if (!user || !db) return;
-    // WRITES TO PUBLIC PATH FOR CROSS-USER ACCESS (Rule 1 Fix)
     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'notifications'), {
         type: 'friend_request',
         targetUid: targetUser.uid,
@@ -374,7 +403,6 @@ const App = () => {
         friends: arrayUnion({ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' })
     });
 
-    // Cleanup the public notification
     const notifRef = doc(db, 'artifacts', appId, 'public', 'data', 'notifications', notif.id);
     batch.delete(notifRef);
 
@@ -498,7 +526,6 @@ const App = () => {
     setActiveGuildId(guildToJoin.id);
   };
 
-  // --- SMART TACTICAL ALERTS ---
   const handleSubmitSession = async (e) => {
     e.preventDefault();
     if (!db || !user) return;
@@ -715,6 +742,7 @@ const App = () => {
                         <div className="mt-8 flex gap-3">
                             <button onClick={() => setProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
                             <button onClick={() => setProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => setProfile({...profile, theme: 'neon'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'neon' ? 'border-fuchsia-600 bg-fuchsia-900/20' : 'border-transparent opacity-40'}`}><Sparkles className="w-4 h-4 mx-auto text-fuchsia-500" /></button>
                         </div>
                         
                         <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-6 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
@@ -732,6 +760,7 @@ const App = () => {
                             <input placeholder="PSN" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} />
                             <input placeholder="XBOX" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.xbox} onChange={e => setProfile({...profile, handles: {...profile.handles, xbox: e.target.value}})} />
                         </div></div>
+                        <div><p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Target className="w-3 h-3 inline mr-2" /> Showcase</p><div className="space-y-3">{[0,1,2,3,4].map(idx => (<input key={idx} placeholder={`GAME 0${idx+1}`} className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.showcaseGames?.[idx] || ''} onChange={e => { const newGames = [...(profile.showcaseGames || ['', '', '', '', ''])]; newGames[idx] = e.target.value; setProfile({...profile, showcaseGames: newGames}); }} />))}</div></div>
                     </div>
                 </div>
               </div>
@@ -755,7 +784,7 @@ const App = () => {
       {/* MODALS */}
       {viewingProfile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
-          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
+          <div className={`${viewingProfile.theme === 'dark' || viewingProfile.theme === 'neon' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
             <button onClick={() => setViewingProfile(null)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
             <div className="text-center mb-8"><Avatar src={viewingProfile.photoURL} name={viewingProfile.displayName} size="xl" className="mx-auto mb-6" /><h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3></div>
             {viewingProfile.uid !== user?.uid && (
@@ -775,7 +804,7 @@ const App = () => {
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
-            <div className="flex justify-between items-start mb-6"><div><h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>{rosterGuild.isPrivate && (<div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl"><div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div><button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white"><Copy className="w-4 h-4" /></button></div>)}</div><button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button></div>
+            <div className="flex justify-between items-start mb-6"><div><h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>{rosterGuild.isPrivate && (<div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl"><div><p className="text-[8px] font-black uppercase tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div><button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button></div>)}</div><button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button></div>
             <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{rosterGuild.members?.map((m, idx) => (<button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}><Avatar src={m.photoURL} name={m.name} size="md" className="group-hover:scale-110 transition" /><div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>{(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}</button>))}</div>
           </div>
         </div>
@@ -785,12 +814,12 @@ const App = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10"><h3 className="text-4xl font-black uppercase italic tracking-tighter">Directory</h3><button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button></div>
-            <div className="mb-10 p-6 rounded-[2.5rem] bg-indigo-600/10 border border-indigo-500/20"><p className="text-[10px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Secure Enlistment</p><form onSubmit={joinPrivateGuild} className="flex gap-4"><input placeholder="INVITE CODE" className="flex-1 p-5 rounded-2xl bg-black/40 border border-indigo-500/30 outline-none text-xs font-black uppercase transition text-white" value={inviteInput} onChange={e => setInviteInput(e.target.value.toUpperCase())} maxLength={6} /><button type="submit" className="px-8 py-5 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest shadow-xl transition">Enlist</button></form></div>
+            <div className="mb-10 p-6 rounded-[2.5rem] bg-indigo-600/10 border border-indigo-500/20"><p className="text-[10px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Secure Enlistment</p><form onSubmit={joinPrivateGuild} className="flex gap-4"><input placeholder="ENTER INVITE CODE" className="flex-1 p-5 rounded-2xl bg-black/40 border border-indigo-500/30 outline-none text-xs font-black uppercase focus:border-indigo-500 transition text-white" value={inviteInput} onChange={e => setInviteInput(e.target.value.toUpperCase())} maxLength={6} /><button type="submit" className="px-8 py-5 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest shadow-xl transition">Enlist</button></form></div>
             <div className="space-y-4 max-h-[30vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{guilds.map(g => (<div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center group`}><div className="flex-1"><div className="flex items-center gap-2"><p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>{g.isPrivate && <Lock className="w-3 h-3 opacity-30" />}</div><p className="text-[9px] font-black opacity-30 mt-1 uppercase">{g.members?.length || 0} Members</p></div><div className="flex items-center gap-2">
                 {g.isPrivate ? (<div className="px-6 py-3 rounded-2xl bg-slate-500/5 text-slate-400 text-[9px] font-black uppercase italic border border-white/5">Private</div>) : (<button onClick={() => handleToggleGuild(g)} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition active:scale-95 ${profile.joinedGuilds?.includes(g.id) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>{profile.joinedGuilds?.includes(g.id) ? 'Retire' : 'Enlist'}</button>)}
                 {g.ownerId === user?.uid && <button onClick={() => disbandGuild(g.id)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white"><Skull className="w-4 h-4" /></button>}
             </div></div>))}</div>
-            <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}><p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p><div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-indigo-600 bg-indigo-500/10 text-indigo-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private' : 'Public'}</span></button></div><button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl transition`}>Commission Sector</button></div>
+            <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}><p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p><div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-fuchsia-600 bg-fuchsia-950/20 text-fuchsia-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private' : 'Public'}</span></button></div><button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button></div>
           </div>
         </div>
       )}
@@ -809,6 +838,21 @@ const App = () => {
             <div className="flex justify-between items-start mb-8"><h3 className="text-4xl font-black uppercase italic tracking-tighter">New Mission</h3><button onClick={() => setIsModalOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button></div>
             <form onSubmit={handleSubmitSession} className="space-y-6"><input placeholder="GAME / OPERATION NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required /><div className="grid grid-cols-1 md:grid-cols-3 gap-6"><input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} /><input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} /><div className="relative"><Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="HR" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} /></div></div><div className="grid grid-cols-1 sm:grid-cols-2 gap-6"><select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required><option value="">Select Guild</option>{guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (<option key={g.id} value={g.id}>{String(g.name)}</option>))}</select><div className="relative"><UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="SLOTS" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} /></div></div><button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Deploy Mission</button></form>
           </div>
+        </div>
+      )}
+
+      {/* ACCOUNT TERMINATION MODAL */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/98 backdrop-blur-xl">
+            <div className="bg-zinc-900 border border-rose-500/30 rounded-[5rem] p-12 max-w-lg w-full text-center shadow-2xl relative overflow-hidden">
+                <AlertTriangle className="w-16 h-16 text-rose-500 mx-auto mb-6 animate-pulse" />
+                <h3 className="text-4xl font-black italic uppercase tracking-tighter text-rose-500 mb-2">Final Warning</h3>
+                <p className="text-[11px] font-black uppercase text-white/40 tracking-widest leading-relaxed mb-10">Permanently terminate your identity? Registry will be purged.</p>
+                <div className="space-y-4">
+                    <button onClick={handleTerminateAccount} disabled={deleteLoading} className="w-full py-6 rounded-3xl bg-rose-600 text-white font-black uppercase text-xs tracking-widest shadow-xl transition">Confirm</button>
+                    <button onClick={() => setShowDeleteConfirm(false)} className="w-full py-6 rounded-3xl bg-white/5 border border-white/10 text-white font-black uppercase text-[10px] tracking-widest">Cancel</button>
+                </div>
+            </div>
         </div>
       )}
     </div>
