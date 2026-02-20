@@ -23,7 +23,9 @@ import {
   onAuthStateChanged,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  signOut
+  signOut,
+  sendEmailVerification,
+  reload
 } from 'firebase/auth';
 import { 
   Calendar, 
@@ -63,7 +65,8 @@ import {
   MessageSquare,
   CheckCircle2,
   Copy,
-  Hash
+  Hash,
+  ShieldAlert
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
@@ -73,8 +76,12 @@ const manualFirebaseConfig = {
   projectId: "gamesync-7fdde",
   storageBucket: "gamesync-7fdde.firebasestorage.app",
   messagingSenderId: "209595978385",
-  appId: "1:209595978385:web:804bf3167a353073be2530"
+  appId: "1:209595978385:web:804bf3167a353073be2530",
+  measurementId: "G-Z4RLFK079H"
 };
+
+// SET YOUR FEEDBACK EMAIL HERE
+const SUPPORT_EMAIL = "your-email@example.com";
 
 const getFirebaseConfig = () => {
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
@@ -115,6 +122,7 @@ const App = () => {
   const [authMode, setAuthMode] = useState('login'); 
   const [authForm, setAuthForm] = useState({ email: '', password: '', displayName: '' });
   const [authError, setAuthError] = useState(null);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   const [sessions, setSessions] = useState([]);
   const [guilds, setGuilds] = useState([]);
@@ -172,7 +180,7 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (!user || !db) return;
+    if (!user || !db || !user.emailVerified) return;
     const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
     
     const initProfile = async () => {
@@ -200,7 +208,7 @@ const App = () => {
       if (snap.exists()) setProfile(prev => ({ ...prev, ...snap.data() }));
     });
     return () => { unsubSessions(); unsubGuilds(); unsubProfile(); };
-  }, [user]);
+  }, [user, user?.emailVerified]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -208,7 +216,8 @@ const App = () => {
     setAuthLoading(true);
     try {
       if (authMode === 'register') {
-        await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
+        const cred = await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
+        await sendEmailVerification(cred.user);
       } else {
         await signInWithEmailAndPassword(auth, authForm.email, authForm.password);
       }
@@ -219,19 +228,31 @@ const App = () => {
     }
   };
 
-  // --- IDENTITY PROPAGATION ENGINE ---
+  const checkVerification = async () => {
+    if (!user) return;
+    setIsVerifying(true);
+    await reload(user);
+    setUser({ ...auth.currentUser });
+    setIsVerifying(false);
+  };
+
+  const resendVerification = async () => {
+    if (!user) return;
+    try {
+        await sendEmailVerification(user);
+        setAuthError("NEW VERIFICATION LINK TRANSMITTED");
+    } catch (err) {
+        setAuthError(err.message);
+    }
+  };
+
   const saveProfile = async (data) => {
     if (!user || !db) return;
     setProfileSaving(true);
-    
     try {
       const batch = writeBatch(db);
-
-      // 1. Update Private Info
       const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
       batch.set(profileRef, data, { merge: true });
-      
-      // 2. Update Public User Directory (Reference Table)
       const dirRef = doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid);
       batch.set(dirRef, {
           displayName: data.displayName,
@@ -241,29 +262,19 @@ const App = () => {
           uid: user.uid
       }, { merge: true });
 
-      // 3. PROPAGATE NAME CHANGE TO GUILDS
       guilds.forEach(guild => {
         const memberIdx = guild.members?.findIndex(m => (m.uid || m) === user.uid);
         if (memberIdx !== -1) {
           const updatedMembers = [...guild.members];
           updatedMembers[memberIdx] = { uid: user.uid, name: data.displayName };
-          const gRef = doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id);
-          batch.update(gRef, { members: updatedMembers });
+          batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: updatedMembers });
         }
       });
 
-      // 4. PROPAGATE NAME CHANGE TO SESSIONS
       sessions.forEach(session => {
         let needsUpdate = false;
         const updateData = {};
-
-        // Update if Creator
-        if (session.userId === user.uid) {
-          updateData.userName = data.displayName;
-          needsUpdate = true;
-        }
-
-        // Update if Participant
+        if (session.userId === user.uid) { updateData.userName = data.displayName; needsUpdate = true; }
         const partIdx = session.participants?.findIndex(p => p.uid === user.uid);
         if (partIdx !== -1) {
           const updatedParticipants = [...session.participants];
@@ -271,16 +282,9 @@ const App = () => {
           updateData.participants = updatedParticipants;
           needsUpdate = true;
         }
-
-        if (needsUpdate) {
-          const sRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id);
-          batch.update(sRef, updateData);
-        }
+        if (needsUpdate) batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), updateData);
       });
-
       await batch.commit();
-    } catch (err) {
-      console.error("Propagation Failure:", err);
     } finally {
       setTimeout(() => setProfileSaving(false), 800);
     }
@@ -291,9 +295,7 @@ const App = () => {
     setProfileLoading(true);
     try {
         const snap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', targetUid));
-        if (snap.exists()) {
-            setViewingProfile(snap.data());
-        }
+        if (snap.exists()) setViewingProfile(snap.data());
     } finally {
         setProfileLoading(false);
     }
@@ -305,10 +307,7 @@ const App = () => {
     setFeedbackLoading(true);
     try {
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'feedback'), {
-            message: feedbackMsg,
-            senderName: profile.displayName,
-            senderUid: user.uid,
-            timestamp: serverTimestamp()
+            message: feedbackMsg, senderName: profile.displayName, senderUid: user.uid, timestamp: serverTimestamp()
         });
         setFeedbackSent(true);
         setFeedbackMsg('');
@@ -331,24 +330,12 @@ const App = () => {
     await deleteGuildSessions(gId);
   };
 
-  const generateInviteCode = () => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let code = '';
-    for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
-    return code;
-  };
-
   const createGuild = async () => {
     if (!newGuild.name || !user || !db) return;
-    const inviteCode = newGuild.isPrivate ? generateInviteCode() : null;
+    const inviteCode = newGuild.isPrivate ? Math.random().toString(36).substring(2, 8).toUpperCase() : null;
     const gRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'guilds'), { 
-      name: newGuild.name, 
-      desc: newGuild.desc || "Active Tactical Sector",
-      ownerId: user.uid, 
-      members: [{ uid: user.uid, name: profile.displayName }],
-      isPrivate: newGuild.isPrivate,
-      inviteCode: inviteCode,
-      createdAt: serverTimestamp() 
+      name: newGuild.name, desc: newGuild.desc || "Active Tactical Sector", ownerId: user.uid, 
+      members: [{ uid: user.uid, name: profile.displayName }], isPrivate: newGuild.isPrivate, inviteCode, createdAt: serverTimestamp() 
     });
     const updatedJoined = [...(profile.joinedGuilds || []), gRef.id];
     await saveProfile({ ...profile, joinedGuilds: updatedJoined });
@@ -365,9 +352,7 @@ const App = () => {
     if (!guildToJoin) { setInviteError("INVALID SECTOR CODE"); return; }
     if (profile.joinedGuilds?.includes(guildToJoin.id)) { setInviteError("ALREADY ENLISTED"); return; }
     await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), guildToJoin.id] });
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), {
-      members: arrayUnion({ uid: user.uid, name: profile.displayName })
-    });
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName }) });
     setInviteInput('');
     setActiveGuildId(guildToJoin.id);
   };
@@ -416,13 +401,8 @@ const App = () => {
     const gId = formData.guildId || activeGuildId;
     if (gId === 'all') return;
     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'), { 
-      ...formData, 
-      maxOpenings: Number(formData.maxOpenings),
-      guildId: gId, 
-      userId: user.uid, 
-      userName: profile.displayName, 
-      participants: [{ uid: user.uid, name: profile.displayName }], 
-      createdAt: serverTimestamp() 
+      ...formData, maxOpenings: Number(formData.maxOpenings), guildId: gId, 
+      userId: user.uid, userName: profile.displayName, participants: [{ uid: user.uid, name: profile.displayName }], createdAt: serverTimestamp() 
     });
     setIsModalOpen(false);
   };
@@ -438,9 +418,10 @@ const App = () => {
     return groups;
   }, [sessions, activeGuildId, profile.joinedGuilds, searchTerm]);
 
-  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Check Firebase keys in App.jsx.</p></div>;
+  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Check App.jsx.</p></div>;
   if (authLoading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Gamepad2 className="w-12 h-12 text-indigo-500 animate-bounce" /></div>;
 
+  // --- LOGIN / REGISTER VIEW ---
   if (!user) {
     return (
       <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white">
@@ -449,7 +430,7 @@ const App = () => {
           <div className="text-center mb-10">
             <Gamepad2 className="w-16 h-16 text-indigo-500 mx-auto mb-6" />
             <h1 className="text-4xl font-black uppercase tracking-tighter italic">GameSync</h1>
-            <p className="text-[10px] uppercase font-black tracking-[0.3em] opacity-30 mt-2">Operator Identity Registry</p>
+            <p className="text-[10px] uppercase font-black tracking-[0.3em] opacity-30 mt-2">Identity Matrix Registry</p>
           </div>
           <form onSubmit={handleAuth} className="space-y-4">
             <input type="email" placeholder="EMAIL" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase transition" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} />
@@ -463,6 +444,37 @@ const App = () => {
     );
   }
 
+  // --- EMAIL VERIFICATION PENDING VIEW ---
+  if (user && !user.emailVerified) {
+    return (
+        <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center">
+            <div className="w-full max-w-md bg-zinc-900 p-12 rounded-[5rem] border border-zinc-800 shadow-2xl relative">
+                <div className="mb-10">
+                    <div className="w-20 h-20 bg-indigo-600/20 border border-indigo-500/40 rounded-3xl flex items-center justify-center mx-auto mb-6">
+                        <Mail className="w-10 h-10 text-indigo-400 animate-pulse" />
+                    </div>
+                    <h2 className="text-4xl font-black italic uppercase tracking-tighter">Verify Intel</h2>
+                    <p className="text-[10px] font-black uppercase opacity-30 mt-2 tracking-[0.2em]">Transmission Sent to {user.email}</p>
+                </div>
+                
+                <div className="space-y-4">
+                    <button onClick={checkVerification} disabled={isVerifying} className="w-full p-6 rounded-3xl bg-indigo-600 font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-3 active:scale-95 transition disabled:opacity-50">
+                        {isVerifying ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} Access Sector
+                    </button>
+                    <button onClick={resendVerification} className="w-full p-6 rounded-3xl bg-white/5 border border-white/10 font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition">Resend Transmission</button>
+                </div>
+
+                <div className="mt-12 pt-8 border-t border-white/5">
+                    <button onClick={() => signOut(auth)} className="flex items-center gap-2 mx-auto text-[9px] font-black uppercase opacity-30 hover:opacity-100 transition"><LogOut className="w-3 h-3" /> Abort Registry</button>
+                </div>
+
+                {authError && <div className="mt-6 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-[9px] text-emerald-500 font-bold uppercase">{authError}</div>}
+            </div>
+        </div>
+    );
+  }
+
+  // --- MAIN APP INTERFACE ---
   return (
     <div className={`min-h-screen ${activeTheme.bg} ${activeTheme.text} transition-colors duration-500`}>
       <header className={`${activeTheme.header} border-b ${activeTheme.border} sticky top-0 z-40 h-16 flex items-center justify-between px-6 shadow-sm`}>
@@ -474,14 +486,14 @@ const App = () => {
           <button onClick={() => setCurrentView('calendar')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'calendar' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Hub</button>
           <button onClick={() => setCurrentView('profile')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'profile' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Profile</button>
           <button onClick={() => setIsFeedbackModalOpen(true)} className="p-2 opacity-40 hover:text-indigo-500 transition"><MessageSquare className="w-4 h-4" /></button>
-          <button onClick={() => auth.signOut()} className="p-2 opacity-40 hover:text-rose-500 transition"><LogOut className="w-4 h-4" /></button>
+          <button onClick={() => signOut(auth)} className="p-2 opacity-40 hover:text-rose-500 transition"><LogOut className="w-4 h-4" /></button>
         </nav>
       </header>
 
       <main className="max-w-7xl mx-auto p-8 flex flex-col md:flex-row gap-8">
         <aside className="w-full md:w-72">
           <p className="text-[10px] font-black uppercase opacity-30 mb-4 tracking-widest">Tactical Sectors</p>
-          <button onClick={() => setActiveGuildId('all')} className={`w-full text-left p-3 rounded-xl mb-2 font-black text-xs transition ${activeGuildId === 'all' ? activeTheme.button : 'hover:bg-slate-500/10'}`}>Global Feed</button>
+          <button onClick={() => setActiveGuildId('all')} className={`w-full text-left p-3 rounded-xl mb-2 font-black text-xs transition ${activeGuildId === 'all' ? activeTheme.button : 'hover:bg-slate-500/10'}`}>Global Comms</button>
           <div className="mt-6 space-y-2">
             {guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (
                 <div key={g.id} className="flex items-center gap-1 group">
@@ -600,14 +612,14 @@ const App = () => {
         </div>
       </main>
 
-      {/* MODALS */}
+      {/* FEEDBACK MODAL */}
       {isFeedbackModalOpen && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
             {!feedbackSent ? (
                 <>
                     <button onClick={() => setIsFeedbackModalOpen(false)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
-                    <div className="text-center mb-10"><MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" /><h3 className="text-4xl font-black italic uppercase tracking-tighter">Report Intelligence</h3></div>
+                    <div className="text-center mb-10"><MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" /><h3 className="text-4xl font-black italic uppercase tracking-tighter">Report Intel</h3></div>
                     <form onSubmit={handleSendFeedback} className="space-y-6">
                         <textarea required placeholder="DESCRIBE ISSUE..." className={`w-full h-40 p-6 rounded-[2rem] ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase text-xs focus:border-indigo-500 transition shadow-inner resize-none`} value={feedbackMsg} onChange={e => setFeedbackMsg(e.target.value)} />
                         <button type="submit" disabled={feedbackLoading} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-2`}>
@@ -622,6 +634,7 @@ const App = () => {
         </div>
       )}
 
+      {/* PUBLIC INTEL DECK (Profile Viewer) */}
       {viewingProfile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
           <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
@@ -646,6 +659,7 @@ const App = () => {
         </div>
       )}
 
+      {/* ROSTER MODAL */}
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
@@ -675,6 +689,7 @@ const App = () => {
         </div>
       )}
 
+      {/* GUILD DIRECTORY MODAL */}
       {isGuildModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
@@ -698,7 +713,7 @@ const App = () => {
             <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
               <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-indigo-600 bg-indigo-500/10 text-indigo-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private Sector' : 'Public Sector'}</span></button></div>
-              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Sector</button>
+              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button>
             </div>
           </div>
         </div>
