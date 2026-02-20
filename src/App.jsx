@@ -70,9 +70,9 @@ import {
   ShieldAlert,
   AlertTriangle,
   UserMinus,
-  Heart,
-  UserCheck,
-  Image as ImageIcon
+  Bell,
+  Check,
+  UserX
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
@@ -115,11 +115,6 @@ if (isConfigValid) {
   }
 }
 
-const THEMES = {
-  light: { id: 'light', bg: 'bg-slate-50', card: 'bg-white', header: 'bg-white', accent: 'text-indigo-600', border: 'border-slate-100', text: 'text-slate-900', muted: 'text-slate-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' },
-  dark: { id: 'dark', bg: 'bg-zinc-950', card: 'bg-zinc-900', header: 'bg-zinc-900', accent: 'text-indigo-400', border: 'border-zinc-800', text: 'text-zinc-100', muted: 'text-zinc-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' }
-};
-
 // Avatar Helper Component
 const Avatar = ({ src, name, size = "md", className = "" }) => {
     const sizeClasses = {
@@ -154,10 +149,13 @@ const App = () => {
   const [currentView, setCurrentView] = useState('calendar'); 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
   
   const [rosterGuild, setRosterGuild] = useState(null); 
   const [viewingProfile, setViewingProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
+
+  const [notifications, setNotifications] = useState([]);
 
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState(false);
@@ -238,7 +236,12 @@ const App = () => {
     const unsubProfile = onSnapshot(profileRef, (snap) => {
       if (snap.exists()) setProfile(prev => ({ ...prev, ...snap.data() }));
     });
-    return () => { unsubSessions(); unsubGuilds(); unsubProfile(); };
+    // Listen for Tactical Notifications (Requests)
+    const unsubNotifs = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'notifications'), (snap) => {
+        setNotifications(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => { unsubSessions(); unsubGuilds(); unsubProfile(); unsubNotifs(); };
   }, [user, user?.emailVerified]);
 
   const handleAuth = async (e) => {
@@ -302,7 +305,6 @@ const App = () => {
           uid: user.uid
       }, { merge: true });
 
-      // Propagation logic for Guilds
       guilds.forEach(guild => {
         const memberIdx = guild.members?.findIndex(m => (m.uid || m) === user.uid);
         if (memberIdx !== -1) {
@@ -312,7 +314,6 @@ const App = () => {
         }
       });
 
-      // Propagation logic for Sessions
       sessions.forEach(session => {
         let needsUpdate = false;
         const updateData = {};
@@ -337,15 +338,63 @@ const App = () => {
     }
   };
 
-  // --- FRIENDS SYSTEM ---
-  const toggleFriend = async (targetUser) => {
+  // --- FRIENDS & NOTIFICATION HANDLERS ---
+  const sendFriendRequest = async (targetUser) => {
     if (!user || !db) return;
-    const isFriend = profile.friends?.some(f => f.uid === targetUser.uid);
-    const updatedFriends = isFriend 
-        ? profile.friends.filter(f => f.uid !== targetUser.uid)
-        : [...(profile.friends || []), { uid: targetUser.uid, name: targetUser.displayName, photoURL: targetUser.photoURL || '' }];
-    
-    await saveProfile({ ...profile, friends: updatedFriends });
+    // Send notification to target user's private folder
+    await addDoc(collection(db, 'artifacts', appId, 'users', targetUser.uid, 'notifications'), {
+        type: 'friend_request',
+        senderUid: user.uid,
+        senderName: profile.displayName,
+        senderPhotoURL: profile.photoURL || '',
+        timestamp: serverTimestamp()
+    });
+  };
+
+  const acceptFriendRequest = async (notif) => {
+    if (!user || !db) return;
+    const batch = writeBatch(db);
+
+    // 1. Add to my friends
+    const myProfileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
+    batch.update(myProfileRef, {
+        friends: arrayUnion({ uid: notif.senderUid, name: notif.senderName, photoURL: notif.senderPhotoURL || '' })
+    });
+
+    // 2. Add to sender's friends
+    const theirProfileRef = doc(db, 'artifacts', appId, 'users', notif.senderUid, 'profile', 'info');
+    batch.update(theirProfileRef, {
+        friends: arrayUnion({ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' })
+    });
+
+    // 3. Update public directories
+    const myDirRef = doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid);
+    batch.set(myDirRef, { uid: user.uid }, { merge: true }); // Triggers refresh in UI
+
+    // 4. Delete the notification
+    const notifRef = doc(db, 'artifacts', appId, 'users', user.uid, 'notifications', notif.id);
+    batch.delete(notifRef);
+
+    await batch.commit();
+  };
+
+  const removeFriend = async (friendUid) => {
+    if (!user || !db) return;
+    const friend = profile.friends?.find(f => f.uid === friendUid);
+    if (!friend) return;
+
+    const batch = writeBatch(db);
+    // Remove from mine
+    batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'), {
+        friends: arrayRemove(friend)
+    });
+    // Remove from theirs (best effort)
+    const theirRef = doc(db, 'artifacts', appId, 'users', friendUid, 'profile', 'info');
+    batch.update(theirRef, {
+        friends: arrayRemove({ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' })
+    });
+
+    await batch.commit();
   };
 
   const handleTerminateAccount = async () => {
@@ -356,26 +405,14 @@ const App = () => {
         guilds.forEach(guild => {
             const memberToRemove = guild.members?.find(m => (m.uid || m) === user.uid);
             if (memberToRemove) {
-                const remainingCount = (guild.members?.length || 0) - 1;
-                if (remainingCount <= 0) {
-                    batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id));
-                } else {
-                    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), {
-                        members: arrayRemove(memberToRemove)
-                    });
-                }
+                if (guild.members?.length <= 1) batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id));
+                else batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: arrayRemove(memberToRemove) });
             }
         });
         sessions.forEach(session => {
             const partToRemove = session.participants?.find(p => p.uid === user.uid);
-            if (partToRemove) {
-                batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), {
-                    participants: arrayRemove(partToRemove)
-                });
-            }
-            if (session.userId === user.uid) {
-                batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id));
-            }
+            if (partToRemove) batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: arrayRemove(partToRemove) });
+            if (session.userId === user.uid) batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id));
         });
         batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'));
         batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid));
@@ -397,11 +434,8 @@ const App = () => {
       const newJoined = joinedList.filter(id => id !== guild.id);
       await saveProfile({ ...profile, joinedGuilds: newJoined });
       const memberToRemove = guild.members?.find(m => (m.uid || m) === user.uid);
-      if (guild.members?.length === 1) {
-          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id));
-      } else {
-          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: arrayRemove(memberToRemove) });
-      }
+      if (guild.members?.length === 1) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id));
+      else await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: arrayRemove(memberToRemove) });
     } else {
       if (guild.isPrivate) return;
       await saveProfile({ ...profile, joinedGuilds: [...joinedList, guild.id] });
@@ -420,17 +454,6 @@ const App = () => {
       if (participants.length >= (Number(session.maxOpenings) || 0) + 1) return;
       const updated = [...participants, { uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }];
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
-    }
-  };
-
-  const openPublicProfile = async (targetUid) => {
-    if (!db) return;
-    setProfileLoading(true);
-    try {
-        const snap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', targetUid));
-        if (snap.exists()) setViewingProfile(snap.data());
-    } finally {
-        setProfileLoading(false);
     }
   };
 
@@ -553,10 +576,43 @@ const App = () => {
         <nav className="flex items-center gap-4">
           <button onClick={() => setCurrentView('calendar')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'calendar' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Hub</button>
           <button onClick={() => setCurrentView('profile')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'profile' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Profile</button>
+          
+          {/* NOTIFICATION TRIGGER */}
+          <button onClick={() => setIsNotifOpen(!isNotifOpen)} className="relative p-2 opacity-40 hover:text-indigo-500 transition">
+              <Bell className="w-5 h-5" />
+              {notifications.length > 0 && <div className="absolute top-0 right-0 w-2 h-2 bg-rose-500 rounded-full animate-ping"></div>}
+          </button>
+
           <button onClick={() => setIsFeedbackModalOpen(true)} className="p-2 opacity-40 hover:text-indigo-500 transition"><MessageSquare className="w-4 h-4" /></button>
           <button onClick={() => signOut(auth)} className="p-2 opacity-40 hover:text-rose-500 transition"><LogOut className="w-4 h-4" /></button>
         </nav>
       </header>
+
+      {/* NOTIFICATION FEED POPUP */}
+      {isNotifOpen && (
+          <div className={`fixed top-20 right-8 z-[100] w-80 ${activeTheme.card} border ${activeTheme.border} rounded-3xl shadow-2xl p-6 animate-in slide-in-from-top-4 duration-300`}>
+              <div className="flex justify-between items-center mb-6">
+                  <p className="text-[10px] font-black uppercase tracking-widest opacity-40">Tactical Feed</p>
+                  <button onClick={() => setIsNotifOpen(false)}><X className="w-4 h-4 opacity-40" /></button>
+              </div>
+              <div className="space-y-4 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
+                  {notifications.length === 0 ? (
+                      <p className="text-center py-8 text-[10px] font-black uppercase opacity-20 italic">No incoming signals</p>
+                  ) : notifications.map(n => (
+                      <div key={n.id} className={`${activeTheme.bg} p-4 rounded-2xl border ${activeTheme.border}`}>
+                          <div className="flex items-center gap-3 mb-3">
+                              <Avatar src={n.senderPhotoURL} name={n.senderName} size="sm" />
+                              <p className="text-[10px] font-black uppercase leading-tight">{n.senderName} <span className="opacity-40 font-bold">requested enlistment as ally</span></p>
+                          </div>
+                          <div className="flex gap-2">
+                              <button onClick={() => acceptFriendRequest(n)} className="flex-1 py-2 bg-indigo-600 text-white rounded-xl flex items-center justify-center transition active:scale-95"><Check className="w-3 h-3" /></button>
+                              <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'notifications', n.id))} className="flex-1 py-2 bg-rose-500/10 text-rose-500 rounded-xl flex items-center justify-center transition active:scale-95"><UserX className="w-3 h-3" /></button>
+                          </div>
+                      </div>
+                  ))}
+              </div>
+          </div>
+      )}
 
       <main className="max-w-7xl mx-auto p-8 flex flex-col md:flex-row gap-8">
         <aside className="w-full md:w-72">
@@ -629,8 +685,8 @@ const App = () => {
                         <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} className="w-full bg-transparent text-center text-3xl font-black italic uppercase outline-none focus:text-indigo-600 transition" />
                         
                         <div className="mt-8 flex gap-3">
-                            <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
-                            <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => setProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => setProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
                         </div>
                         
                         <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-6 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
@@ -734,16 +790,25 @@ const App = () => {
                 <h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3>
             </div>
 
-            {/* FRIEND TOGGLE ACTION */}
+            {/* FRIEND PROTOCOL ACTIONS */}
             {viewingProfile.uid !== user?.uid && (
                 <div className="flex justify-center mb-10">
-                    <button 
-                        onClick={() => toggleFriend(viewingProfile)}
-                        className={`px-10 py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest transition flex items-center gap-2 ${profile.friends?.some(f => f.uid === viewingProfile.uid) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : 'bg-indigo-600 text-white'}`}
-                    >
-                        {profile.friends?.some(f => f.uid === viewingProfile.uid) ? <UserMinus className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
-                        {profile.friends?.some(f => f.uid === viewingProfile.uid) ? 'Remove Ally' : 'Enlist Ally'}
-                    </button>
+                    {profile.friends?.some(f => f.uid === viewingProfile.uid) ? (
+                        <button 
+                            onClick={() => removeFriend(viewingProfile.uid)}
+                            className="px-10 py-4 rounded-2xl bg-rose-500/10 text-rose-500 border border-rose-500/20 font-black uppercase text-[10px] tracking-widest flex items-center gap-2 active:scale-95 transition"
+                        >
+                            <UserMinus className="w-4 h-4" /> Remove Ally
+                        </button>
+                    ) : (
+                        <button 
+                            onClick={() => sendFriendRequest(viewingProfile)}
+                            disabled={notifications.some(n => n.senderUid === viewingProfile.uid)}
+                            className="px-10 py-4 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest flex items-center gap-2 active:scale-95 transition shadow-xl disabled:opacity-50"
+                        >
+                            <UserPlus className="w-4 h-4" /> Enlist Ally
+                        </button>
+                    )}
                 </div>
             )}
 
