@@ -229,6 +229,40 @@ const App = () => {
     return () => { unsubSessions(); unsubGuilds(); unsubProfile(); };
   }, [user, user?.emailVerified]);
 
+  // --- ACHIEVEMENT ENGINE ---
+  const checkAchievements = (data) => {
+    const unlocked = [...(data.achievements || [])];
+    const h = data.handles || {};
+    
+    // Check Broadcaster
+    if (h.twitch && h.youtube && h.kick && !unlocked.includes('broadcaster')) unlocked.push('broadcaster');
+    
+    // Check Platform Pro
+    if (h.steam && h.psn && h.xbox && !unlocked.includes('platform_pro')) unlocked.push('platform_pro');
+
+    // Check Completionist
+    const allHandlesFilled = Object.values(h).every(v => v && v.trim().length > 0);
+    if (allHandlesFilled && !unlocked.includes('completionist')) unlocked.push('completionist');
+
+    // Check First Guild
+    if (data.joinedGuilds?.length > 0 && !unlocked.includes('first_guild')) unlocked.push('first_guild');
+
+    // Check First Session
+    const isEnlistedAnywhere = sessions.some(s => s.participants?.some(p => p.uid === user?.uid));
+    if (isEnlistedAnywhere && !unlocked.includes('first_session')) unlocked.push('first_session');
+
+    return unlocked;
+  };
+
+  // Auto-sync achievements when session/guild data changes
+  useEffect(() => {
+    if (!user || !user.emailVerified || !profile.displayName) return;
+    const updated = checkAchievements(profile);
+    if (JSON.stringify(updated) !== JSON.stringify(profile.achievements || [])) {
+        saveProfile({ ...profile, achievements: updated });
+    }
+  }, [sessions.length, guilds.length, profile.joinedGuilds?.length]);
+
   const handleAuth = async (e) => {
     e.preventDefault();
     setAuthError(null);
@@ -270,35 +304,11 @@ const App = () => {
     }
   };
 
-  // --- ACHIEVEMENT ENGINE ---
-  const checkAchievements = (data) => {
-    const unlocked = [...(data.achievements || [])];
-    const h = data.handles || {};
-    
-    // 1. Broadcaster (YT, Twitch, Kick)
-    if (h.twitch && h.youtube && h.kick && !unlocked.includes('broadcaster')) {
-        unlocked.push('broadcaster');
-    }
-    
-    // 2. Platform Pro (Steam, PSN, Xbox)
-    if (h.steam && h.psn && h.xbox && !unlocked.includes('platform_pro')) {
-        unlocked.push('platform_pro');
-    }
-
-    // 3. Completionist (Everything filled)
-    const allHandlesFilled = Object.values(h).every(v => v && v.length > 0);
-    if (allHandlesFilled && !unlocked.includes('completionist')) {
-        unlocked.push('completionist');
-    }
-
-    return unlocked;
-  };
-
   const saveProfile = async (data) => {
     if (!user || !db) return;
     setProfileSaving(true);
     
-    // Run Achievement Check
+    // Ensure achievements are fresh
     const updatedAchievements = checkAchievements(data);
     const finalData = { ...data, achievements: updatedAchievements };
 
@@ -379,7 +389,7 @@ const App = () => {
         await batch.commit();
         await deleteUser(auth.currentUser);
     } catch (err) {
-        setAuthError("CRITICAL: Re-authentication required for deletion. Logout and log back in, then try again.");
+        setAuthError("RE-AUTHENTICATION REQUIRED: Logout and log back in to verify ownership before deletion.");
     } finally {
         setDeleteLoading(false);
         setShowDeleteConfirm(false);
@@ -390,26 +400,18 @@ const App = () => {
     if (!user || !db) return;
     const joinedList = profile.joinedGuilds || [];
     const isEnlisted = joinedList.includes(guild.id);
-    const members = guild.members || [];
-    const unlocked = [...(profile.achievements || [])];
-
     if (isEnlisted) {
       const newJoined = joinedList.filter(id => id !== guild.id);
       await saveProfile({ ...profile, joinedGuilds: newJoined });
-      const remainingMembers = members.filter(m => (m.uid || m) !== user.uid);
-      if (remainingMembers.length === 0) {
+      const memberToRemove = guild.members?.find(m => (m.uid || m) === user.uid);
+      if (guild.members?.length === 1) {
           await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id));
-          await deleteGuildSessions(guild.id);
       } else {
-          const memberToRemove = members.find(m => (m.uid || m) === user.uid);
           await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: arrayRemove(memberToRemove) });
       }
     } else {
       if (guild.isPrivate) return;
-      // FIRST GUILD ACHIEVEMENT
-      if (!unlocked.includes('first_guild')) unlocked.push('first_guild');
-      
-      await saveProfile({ ...profile, joinedGuilds: [...joinedList, guild.id], achievements: unlocked });
+      await saveProfile({ ...profile, joinedGuilds: [...joinedList, guild.id] });
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName }) });
     }
   };
@@ -418,21 +420,11 @@ const App = () => {
     if (!db || !user) return;
     const participants = session.participants || [];
     const isJoined = participants.some(p => p.uid === user.uid);
-    const capacity = Number(session.maxOpenings) + 1;
-    const unlocked = [...(profile.achievements || [])];
-
     if (isJoined) {
       const updated = participants.filter(p => p.uid !== user.uid);
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
     } else {
-      if (participants.length >= capacity) return;
-      
-      // FIRST SESSION ACHIEVEMENT
-      if (!unlocked.includes('first_session')) {
-          unlocked.push('first_session');
-          await saveProfile({ ...profile, achievements: unlocked });
-      }
-
+      if (participants.length >= (Number(session.maxOpenings) || 0) + 1) return;
       const updated = [...participants, { uid: user.uid, name: profile.displayName }];
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
     }
@@ -465,17 +457,11 @@ const App = () => {
     }
   };
 
-  const deleteGuildSessions = async (gId) => {
-    const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'));
-    const toDelete = snap.docs.filter(d => d.data().guildId === gId);
-    const deletions = toDelete.map(d => deleteDoc(d.ref));
-    await Promise.all(deletions);
-  };
-
   const disbandGuild = async (gId) => {
     if (!window.confirm("PERMANENT DISBAND?")) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', gId));
-    await deleteGuildSessions(gId);
+    const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'));
+    snap.docs.filter(d => d.data().guildId === gId).forEach(d => deleteDoc(d.ref));
   };
 
   const createGuild = async () => {
@@ -485,10 +471,7 @@ const App = () => {
       name: newGuild.name, desc: newGuild.desc || "Active Tactical Sector", ownerId: user.uid, 
       members: [{ uid: user.uid, name: profile.displayName }], isPrivate: newGuild.isPrivate, inviteCode, createdAt: serverTimestamp() 
     });
-    const updatedJoined = [...(profile.joinedGuilds || []), gRef.id];
-    const unlocked = [...(profile.achievements || [])];
-    if (!unlocked.includes('first_guild')) unlocked.push('first_guild');
-    await saveProfile({ ...profile, joinedGuilds: updatedJoined, achievements: unlocked });
+    await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), gRef.id] });
     setNewGuild({ name: '', desc: '', isPrivate: false });
     setIsGuildModalOpen(false);
   };
@@ -500,9 +483,7 @@ const App = () => {
     const targetCode = inviteInput.toUpperCase().trim();
     const guildToJoin = guilds.find(g => g.inviteCode === targetCode);
     if (!guildToJoin) { setInviteError("INVALID CODE"); return; }
-    const unlocked = [...(profile.achievements || [])];
-    if (!unlocked.includes('first_guild')) unlocked.push('first_guild');
-    await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), guildToJoin.id], achievements: unlocked });
+    await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), guildToJoin.id] });
     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName }) });
     setInviteInput('');
     setActiveGuildId(guildToJoin.id);
@@ -641,26 +622,24 @@ const App = () => {
                         <div className="w-32 h-32 mx-auto mb-8 rounded-[3rem] bg-indigo-600 flex items-center justify-center text-white text-5xl font-black shadow-2xl">{profile.displayName.charAt(0)}</div>
                         <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} className="w-full bg-transparent text-center text-3xl font-black italic uppercase outline-none focus:text-indigo-600 transition" />
                         
-                        {/* THEME SELECTION */}
                         <div className="mt-8 flex gap-3">
-                            <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
-                            <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => setProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => setProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
                         </div>
                         
                         <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-6 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
                             {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} {profileSaving ? "SYNCING..." : "SYNC PROFILE"}
                         </button>
 
-                        {/* ACHIEVEMENT VAULT */}
                         <div className="mt-12 pt-8 border-t border-slate-500/10">
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest">Commendations</p>
-                            <div className="grid grid-cols-3 gap-3">
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest">Achievement Vault</p>
+                            <div className="grid grid-cols-5 gap-2">
                                 {ACHIEVEMENTS.map(ach => {
                                     const isUnlocked = profile.achievements?.includes(ach.id);
                                     const Icon = ach.icon;
                                     return (
-                                        <div key={ach.id} title={ach.title + ": " + ach.desc} className={`p-4 rounded-2xl border transition flex flex-col items-center gap-2 ${isUnlocked ? 'bg-indigo-600/10 border-indigo-500/30 text-indigo-400' : 'bg-slate-500/5 border-transparent opacity-10'}`}>
-                                            <Icon className="w-6 h-6" />
+                                        <div key={ach.id} title={ach.title + ": " + ach.desc} className={`p-3 rounded-xl border transition flex flex-col items-center justify-center ${isUnlocked ? 'bg-indigo-600/10 border-indigo-500/30 text-indigo-400' : 'bg-slate-500/5 border-transparent opacity-10'}`}>
+                                            <Icon className="w-5 h-5" />
                                         </div>
                                     );
                                 })}
@@ -731,7 +710,7 @@ const App = () => {
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
             {!feedbackSent ? (
                 <>
-                    <button onClick={() => setIsFeedbackModalOpen(false)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button>
+                    <button onClick={() => setIsFeedbackModalOpen(false)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
                     <div className="text-center mb-10"><MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" /><h3 className="text-4xl font-black italic uppercase tracking-tighter">Submit Intelligence</h3></div>
                     <form onSubmit={handleSendFeedback} className="space-y-6">
                         <textarea required placeholder="DESCRIBE ISSUE..." className={`w-full h-40 p-6 rounded-[2rem] ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase text-xs focus:border-indigo-500 transition shadow-inner resize-none`} value={feedbackMsg} onChange={e => setFeedbackMsg(e.target.value)} />
