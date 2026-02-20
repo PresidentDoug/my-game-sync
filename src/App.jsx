@@ -25,7 +25,8 @@ import {
   signInWithEmailAndPassword,
   signOut,
   sendEmailVerification,
-  reload
+  reload,
+  deleteUser
 } from 'firebase/auth';
 import { 
   Calendar, 
@@ -66,7 +67,9 @@ import {
   CheckCircle2,
   Copy,
   Hash,
-  ShieldAlert
+  ShieldAlert,
+  AlertTriangle,
+  UserMinus
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
@@ -76,8 +79,7 @@ const manualFirebaseConfig = {
   projectId: "gamesync-7fdde",
   storageBucket: "gamesync-7fdde.firebasestorage.app",
   messagingSenderId: "209595978385",
-  appId: "1:209595978385:web:804bf3167a353073be2530",
-  measurementId: "G-Z4RLFK079H"
+  appId: "1:209595978385:web:804bf3167a353073be2530"
 };
 
 // SET YOUR FEEDBACK EMAIL HERE
@@ -140,6 +142,10 @@ const App = () => {
   const [feedbackMsg, setFeedbackMsg] = useState('');
   const [feedbackLoading, setFeedbackLoading] = useState(false);
 
+  // Account Deletion State
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
   const [inviteInput, setInviteInput] = useState('');
   const [inviteError, setInviteError] = useState(null);
 
@@ -173,7 +179,6 @@ const App = () => {
       return;
     }
     const unsubscribe = onAuthStateChanged(auth, (u) => {
-      // Keep the raw user object to maintain prototype methods like getIdToken
       setUser(u);
       setAuthLoading(false);
     });
@@ -233,7 +238,6 @@ const App = () => {
     if (!auth.currentUser) return;
     setIsVerifying(true);
     try {
-      // Using auth.currentUser directly ensures we have the latest instance
       await reload(auth.currentUser);
       setUser(auth.currentUser);
     } catch (err) {
@@ -297,6 +301,60 @@ const App = () => {
     }
   };
 
+  // --- ACCOUNT TERMINATION PROTOCOL ---
+  const handleTerminateAccount = async () => {
+    if (!user || !db || !auth.currentUser) return;
+    setDeleteLoading(true);
+    
+    try {
+        const batch = writeBatch(db);
+
+        // 1. Scrub from all Guilds
+        guilds.forEach(guild => {
+            const memberToRemove = guild.members?.find(m => (m.uid || m) === user.uid);
+            if (memberToRemove) {
+                const remainingCount = (guild.members?.length || 0) - 1;
+                if (remainingCount <= 0) {
+                    batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id));
+                } else {
+                    batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), {
+                        members: arrayRemove(memberToRemove)
+                    });
+                }
+            }
+        });
+
+        // 2. Scrub from all Sessions
+        sessions.forEach(session => {
+            const partToRemove = session.participants?.find(p => p.uid === user.uid);
+            if (partToRemove) {
+                batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), {
+                    participants: arrayRemove(partToRemove)
+                });
+            }
+            if (session.userId === user.uid) {
+                batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id));
+            }
+        });
+
+        // 3. Delete Profiles
+        batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'));
+        batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid));
+
+        await batch.commit();
+
+        // 4. Terminate Auth Credentials
+        await deleteUser(auth.currentUser);
+        
+    } catch (err) {
+        console.error("Termination Failure:", err);
+        setAuthError("CRITICAL: Re-authentication required for deletion. Logout and log back in, then try again.");
+    } finally {
+        setDeleteLoading(false);
+        setShowDeleteConfirm(false);
+    }
+  };
+
   const openPublicProfile = async (targetUid) => {
     if (!db) return;
     setProfileLoading(true);
@@ -337,12 +395,7 @@ const App = () => {
     await deleteGuildSessions(gId);
   };
 
-  const generateInviteCode = () => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let code = '';
-    for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
-    return code;
-  };
+  const generateInviteCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
 
   const createGuild = async () => {
     if (!newGuild.name || !user || !db) return;
@@ -366,9 +419,7 @@ const App = () => {
     if (!guildToJoin) { setInviteError("INVALID SECTOR CODE"); return; }
     if (profile.joinedGuilds?.includes(guildToJoin.id)) { setInviteError("ALREADY ENLISTED"); return; }
     await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), guildToJoin.id] });
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), {
-      members: arrayUnion({ uid: user.uid, name: profile.displayName })
-    });
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName }) });
     setInviteInput('');
     setActiveGuildId(guildToJoin.id);
   };
@@ -437,17 +488,12 @@ const App = () => {
   if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Check App.jsx.</p></div>;
   if (authLoading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Gamepad2 className="w-12 h-12 text-indigo-500 animate-bounce" /></div>;
 
-  // --- LOGIN / REGISTER VIEW ---
   if (!user) {
     return (
       <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white">
         <div className="w-full max-w-md bg-zinc-900 p-12 rounded-[4rem] border border-zinc-800 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-indigo-600 animate-pulse"></div>
-          <div className="text-center mb-10">
-            <Gamepad2 className="w-16 h-16 text-indigo-500 mx-auto mb-6" />
-            <h1 className="text-4xl font-black uppercase tracking-tighter italic">GameSync</h1>
-            <p className="text-[10px] uppercase font-black tracking-[0.3em] opacity-30 mt-2">Identity Matrix Registry</p>
-          </div>
+          <div className="text-center mb-10"><Gamepad2 className="w-16 h-16 text-indigo-500 mx-auto mb-6" /><h1 className="text-4xl font-black uppercase tracking-tighter italic">GameSync</h1></div>
           <form onSubmit={handleAuth} className="space-y-4">
             <input type="email" placeholder="EMAIL" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase transition" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} />
             <input type="password" placeholder="PASSWORD" required className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-indigo-500 text-xs font-black uppercase transition" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} />
@@ -460,37 +506,22 @@ const App = () => {
     );
   }
 
-  // --- EMAIL VERIFICATION PENDING VIEW ---
   if (user && !user.emailVerified) {
     return (
         <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center">
             <div className="w-full max-w-md bg-zinc-900 p-12 rounded-[5rem] border border-zinc-800 shadow-2xl relative">
-                <div className="mb-10">
-                    <div className="w-20 h-20 bg-indigo-600/20 border border-indigo-500/40 rounded-3xl flex items-center justify-center mx-auto mb-6">
-                        <Mail className="w-10 h-10 text-indigo-400 animate-pulse" />
-                    </div>
-                    <h2 className="text-4xl font-black italic uppercase tracking-tighter">Verify Intel</h2>
-                    <p className="text-[10px] font-black uppercase opacity-30 mt-2 tracking-[0.2em]">Transmission Sent to {user.email}</p>
-                </div>
-                
-                <div className="space-y-4">
-                    <button onClick={checkVerification} disabled={isVerifying} className="w-full p-6 rounded-3xl bg-indigo-600 font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-3 active:scale-95 transition disabled:opacity-50">
-                        {isVerifying ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} Access Sector
-                    </button>
-                    <button onClick={resendVerification} className="w-full p-6 rounded-3xl bg-white/5 border border-white/10 font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition">Resend Transmission</button>
-                </div>
-
-                <div className="mt-12 pt-8 border-t border-white/5">
-                    <button onClick={() => signOut(auth)} className="flex items-center gap-2 mx-auto text-[9px] font-black uppercase opacity-30 hover:opacity-100 transition"><LogOut className="w-3 h-3" /> Abort Registry</button>
-                </div>
-
+                <div className="mb-10"><Mail className="w-16 h-16 text-indigo-400 mx-auto mb-6 animate-pulse" /><h2 className="text-4xl font-black italic uppercase tracking-tighter">Verify Intel</h2></div>
+                <button onClick={checkVerification} disabled={isVerifying} className="w-full p-6 rounded-3xl bg-indigo-600 font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-3 active:scale-95 transition">
+                    {isVerifying ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} Access Sector
+                </button>
+                <button onClick={resendVerification} className="w-full mt-4 p-6 rounded-3xl bg-white/5 border border-white/10 font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition">Resend Transmission</button>
+                <button onClick={() => signOut(auth)} className="mt-12 flex items-center gap-2 mx-auto text-[9px] font-black uppercase opacity-30 hover:opacity-100 transition"><LogOut className="w-3 h-3" /> Abort Registry</button>
                 {authError && <div className="mt-6 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-[9px] text-emerald-500 font-bold uppercase">{authError}</div>}
             </div>
         </div>
     );
   }
 
-  // --- MAIN APP INTERFACE ---
   return (
     <div className={`min-h-screen ${activeTheme.bg} ${activeTheme.text} transition-colors duration-500`}>
       <header className={`${activeTheme.header} border-b ${activeTheme.border} sticky top-0 z-40 h-16 flex items-center justify-between px-6 shadow-sm`}>
@@ -531,43 +562,25 @@ const App = () => {
                   <button onClick={() => setIsModalOpen(true)} className={`${activeTheme.button} px-8 py-3 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg`}>+ New Mission</button>
                 </div>
               </div>
-
               <div className="space-y-12">
                 {Object.entries(filteredSessionsByDate).map(([date, daySessions]) => (
                   <div key={date}>
                     <div className="flex items-center gap-4 mb-8"><span className="text-[11px] font-black uppercase opacity-40 tracking-widest italic">{date}</span><div className={`flex-1 h-px ${activeTheme.border}`}></div></div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                      {daySessions.map(session => {
-                        const isEnlisted = session.participants?.some(p => p.uid === user?.uid);
-                        const capacity = (Number(session.maxOpenings) || 0) + 1;
-                        const isFull = (session.participants?.length || 0) >= capacity;
-
-                        return (
-                          <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:-translate-y-1 group relative overflow-hidden flex flex-col`}>
-                            {session.isStreaming && <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-rose-600 text-white px-3 py-1 rounded-full animate-pulse shadow-lg"><Video className="w-3 h-3" /><span className="text-[9px] font-black uppercase tracking-widest">{session.streamPlatform}</span></div>}
-                            <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors leading-tight mb-4">{String(session.gameTitle)}</h4>
-                            <div className="flex flex-wrap gap-4 mb-6 opacity-40">
-                              <div className="flex items-center gap-2"><Clock className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{String(session.startTime)}</span></div>
-                              <div className="flex items-center gap-2"><Timer className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{session.duration} HR</span></div>
-                            </div>
-                            <div className="mb-8 flex-1">
-                                <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-4">{session.participants?.length || 0} / {capacity} Enlisted</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {session.participants?.map((p, i) => (
-                                    <button key={i} onClick={() => openPublicProfile(p.uid)} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase shadow-sm hover:border-indigo-500 transition`}>
-                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                                        {String(p.name)}
-                                    </button>
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="flex gap-3 mt-auto">
-                              <button onClick={() => toggleJoinSession(session)} disabled={isFull && !isEnlisted} className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition active:scale-95 ${isEnlisted ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : isFull ? 'bg-slate-500/10 text-slate-400 opacity-50 cursor-not-allowed' : activeTheme.button}`}>{isEnlisted ? 'Retire' : isFull ? 'Full' : 'Enlist'}</button>
-                              {session.userId === user?.uid && <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id))} className="p-4 rounded-2xl bg-rose-500/10 text-rose-500 transition opacity-20 hover:opacity-100"><Trash2 className="w-5 h-5" /></button>}
-                            </div>
+                      {daySessions.map(session => (
+                        <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:-translate-y-1 group relative overflow-hidden flex flex-col`}>
+                          <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors mb-4">{String(session.gameTitle)}</h4>
+                          <div className="flex flex-wrap gap-4 mb-6 opacity-40"><div className="flex items-center gap-2"><Clock className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{String(session.startTime)}</span></div><div className="flex items-center gap-2"><Timer className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{session.duration} HR</span></div></div>
+                          <div className="mb-8 flex-1">
+                            <p className="text-[10px] font-black uppercase opacity-60 mb-4">{session.participants?.length || 0} / {(Number(session.maxOpenings) || 0) + 1} Enlisted</p>
+                            <div className="flex flex-wrap gap-2">{session.participants?.map((p, i) => (<button key={i} onClick={() => openPublicProfile(p.uid)} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase shadow-sm hover:border-indigo-500 transition`}><div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>{String(p.name)}</button>))}</div>
                           </div>
-                        );
-                      })}
+                          <div className="flex gap-3 mt-auto">
+                            <button onClick={() => toggleJoinSession(session)} className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition ${session.participants?.some(p => p.uid === user.uid) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>{session.participants?.some(p => p.uid === user.uid) ? 'Retire' : 'Enlist'}</button>
+                            {session.userId === user.uid && <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id))} className="p-4 rounded-2xl bg-rose-500/10 text-rose-500 transition opacity-20 hover:opacity-100"><Trash2 className="w-5 h-5" /></button>}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -582,43 +595,30 @@ const App = () => {
                         <div className="w-32 h-32 mx-auto mb-8 rounded-[3rem] bg-indigo-600 flex items-center justify-center text-white text-5xl font-black shadow-2xl">{profile.displayName.charAt(0)}</div>
                         <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} className="w-full bg-transparent text-center text-3xl font-black italic uppercase outline-none focus:text-indigo-600 transition" />
                         <div className="mt-12 space-y-4">
-                            <button onClick={() => setProfile({...profile, theme: 'light'})} className={`w-full p-4 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4" /><span className="text-[10px] font-black uppercase">Standard</span></button>
-                            <button onClick={() => setProfile({...profile, theme: 'dark'})} className={`w-full p-4 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4" /><span className="text-[10px] font-black uppercase">Midnight</span></button>
+                            <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`w-full p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`w-full p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
                         </div>
                         <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-10 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
-                            {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} {profileSaving ? "SYNCING..." : "SYNC PROFILE"}
+                            {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} SYNC PROFILE
                         </button>
-                        <button onClick={() => setIsFeedbackModalOpen(true)} className="w-full mt-4 text-[10px] font-black uppercase opacity-40 hover:opacity-100 transition tracking-widest flex items-center justify-center gap-2 underline underline-offset-4 decoration-dotted"><MessageSquare className="w-3 h-3" /> Report Issue / Feedback</button>
+                        
+                        {/* DANGER ZONE: Account Termination */}
+                        <div className="mt-16 pt-8 border-t border-rose-500/10">
+                            <button onClick={() => setShowDeleteConfirm(true)} className="text-[10px] font-black uppercase text-rose-500 opacity-40 hover:opacity-100 transition tracking-widest underline decoration-dotted underline-offset-4">Terminate Identity</button>
+                        </div>
                     </div>
-
                     <div className="flex-1 space-y-10">
                         <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Identity Matrix</p>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Lock className="w-3 h-3 inline mr-2" /> Identity Matrix</p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <div className="relative group"><LayoutGrid className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="STEAM" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.steam} onChange={e => setProfile({...profile, handles: {...profile.handles, steam: e.target.value}})} /></div>
-                                <div className="relative group"><Gamepad2 className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="PSN" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} /></div>
-                                <div className="relative group"><Gamepad className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="XBOX" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.xbox} onChange={e => setProfile({...profile, handles: {...profile.handles, xbox: e.target.value}})} /></div>
+                                <input placeholder="STEAM" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.steam} onChange={e => setProfile({...profile, handles: {...profile.handles, steam: e.target.value}})} />
+                                <input placeholder="PSN" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} />
+                                <input placeholder="XBOX" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.xbox} onChange={e => setProfile({...profile, handles: {...profile.handles, xbox: e.target.value}})} />
                             </div>
                         </div>
                         <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Video className="w-3 h-3" /> Broadcast Hub</p>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <div className="relative group"><Tv className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="TWITCH" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.twitch} onChange={e => setProfile({...profile, handles: {...profile.handles, twitch: e.target.value}})} /></div>
-                                <div className="relative group"><Youtube className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="YOUTUBE" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.youtube} onChange={e => setProfile({...profile, handles: {...profile.handles, youtube: e.target.value}})} /></div>
-                                <div className="relative group"><ExternalLink className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="KICK" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.kick} onChange={e => setProfile({...profile, handles: {...profile.handles, kick: e.target.value}})} /></div>
-                            </div>
-                        </div>
-                        <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Target className="w-3 h-3" /> Interest Showcase</p>
-                            <div className="space-y-3">
-                                {[0,1,2,3,4].map(idx => (
-                                    <input key={idx} placeholder={`GAME 0${idx+1}`} className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.showcaseGames?.[idx] || ''} onChange={e => {
-                                        const newGames = [...(profile.showcaseGames || ['', '', '', '', ''])];
-                                        newGames[idx] = e.target.value;
-                                        setProfile({...profile, showcaseGames: newGames});
-                                    }} />
-                                ))}
-                            </div>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Target className="w-3 h-3 inline mr-2" /> Showcase</p>
+                            <div className="space-y-3">{[0,1,2,3,4].map(idx => (<input key={idx} placeholder={`GAME 0${idx+1}`} className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.showcaseGames?.[idx] || ''} onChange={e => { const newGames = [...(profile.showcaseGames || ['', '', '', '', ''])]; newGames[idx] = e.target.value; setProfile({...profile, showcaseGames: newGames}); }} />))}</div>
                         </div>
                     </div>
                 </div>
@@ -628,77 +628,56 @@ const App = () => {
         </div>
       </main>
 
-      {/* MODALS */}
-      {isFeedbackModalOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
-          <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
-            {!feedbackSent ? (
-                <>
-                    <button onClick={() => setIsFeedbackModalOpen(false)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
-                    <div className="text-center mb-10"><MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" /><h3 className="text-4xl font-black italic uppercase tracking-tighter">Report Intel</h3></div>
-                    <form onSubmit={handleSendFeedback} className="space-y-6">
-                        <textarea required placeholder="DESCRIBE ISSUE..." className={`w-full h-40 p-6 rounded-[2rem] ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase text-xs focus:border-indigo-500 transition shadow-inner resize-none`} value={feedbackMsg} onChange={e => setFeedbackMsg(e.target.value)} />
-                        <button type="submit" disabled={feedbackLoading} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-2`}>
-                            {feedbackLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} TRANSMIT REPORT
-                        </button>
-                    </form>
-                </>
-            ) : (
-                <div className="text-center py-20 animate-in fade-in zoom-in duration-500"><CheckCircle2 className="w-20 h-20 text-emerald-500 mx-auto mb-6 animate-bounce" /><h3 className="text-4xl font-black italic uppercase tracking-tighter text-emerald-500">Received</h3></div>
-            )}
-          </div>
+      {/* ACCOUNT DELETION CONFIRMATION MODAL */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/98 backdrop-blur-xl">
+            <div className="bg-zinc-900 border border-rose-500/30 rounded-[5rem] p-12 max-w-lg w-full text-center shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-2 bg-rose-600"></div>
+                <AlertTriangle className="w-16 h-16 text-rose-500 mx-auto mb-6 animate-pulse" />
+                <h3 className="text-4xl font-black italic uppercase tracking-tighter text-rose-500 mb-2">Final Warning</h3>
+                <p className="text-[11px] font-black uppercase text-white/40 tracking-widest leading-relaxed mb-10">This will permanently terminate your operator identity, purge your registry handle, and retire you from all tactical sectors. This action cannot be reversed.</p>
+                
+                <div className="space-y-4">
+                    <button onClick={handleTerminateAccount} disabled={deleteLoading} className="w-full py-6 rounded-3xl bg-rose-600 text-white font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-3">
+                        {deleteLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Skull className="w-4 h-4" />} Confirm Termination
+                    </button>
+                    <button onClick={() => setShowDeleteConfirm(false)} className="w-full py-6 rounded-3xl bg-white/5 border border-white/10 text-white font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition">Cancel Request</button>
+                </div>
+                
+                {authError && <div className="mt-8 p-6 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-[9px] font-black uppercase text-rose-500 leading-relaxed">{authError}</div>}
+            </div>
         </div>
       )}
 
+      {/* PROFILE VIEW MODAL */}
       {viewingProfile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
-          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
+          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative`}>
             <button onClick={() => setViewingProfile(null)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
-            <div className="text-center mb-10">
-                <div className="w-24 h-24 mx-auto mb-6 rounded-3xl bg-indigo-600 flex items-center justify-center text-white text-4xl font-black shadow-xl">{viewingProfile.displayName.charAt(0)}</div>
-                <h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3>
-            </div>
-            <div className="grid grid-cols-3 gap-4 mb-10">
-                {Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (
-                    <div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>
-                ))}
-            </div>
-            <div className="space-y-2">
-                <p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>
-                {viewingProfile.showcaseGames?.map((game, idx) => game && (
-                    <div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4"><span className="text-[9px] font-black opacity-20">0{idx+1}</span><span className="text-xs font-black uppercase tracking-tight italic">{game}</span></div>
-                ))}
-            </div>
-            <button onClick={() => setViewingProfile(null)} className="w-full mt-10 py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Intel Deck</button>
+            <div className="text-center mb-10"><div className="w-24 h-24 mx-auto mb-6 rounded-3xl bg-indigo-600 flex items-center justify-center text-white text-4xl font-black shadow-xl">{viewingProfile.displayName.charAt(0)}</div><h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3></div>
+            <div className="grid grid-cols-3 gap-4 mb-10">{Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (<div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>))}</div>
+            <div className="space-y-2"><p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>{viewingProfile.showcaseGames?.map((game, idx) => game && (<div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4"><span className="text-[9px] font-black opacity-20">0{idx+1}</span><span className="text-xs font-black uppercase tracking-tight italic">{game}</span></div>))}</div>
+            <button onClick={() => setViewingProfile(null)} className="w-full mt-10 py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Intel</button>
           </div>
         </div>
       )}
 
+      {/* ROSTER MODAL */}
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
-            <div className="flex justify-between items-start mb-6">
-                <div>
-                    <h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>
-                    {rosterGuild.isPrivate && (
-                        <div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl">
-                            <div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div>
-                            <button onClick={() => { navigator.clipboard.writeText(rosterGuild.inviteCode); }} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button>
-                        </div>
-                    )}
-                </div>
-                <button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button>
-            </div>
-            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
-                {rosterGuild.members?.map((m, idx) => (
-                    <button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}>
-                        <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white shadow-lg group-hover:scale-110 transition">{String(m.name || 'O').charAt(0)}</div>
-                        <div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p><p className="text-[8px] opacity-20 font-bold truncate">{m.uid || m}</p></div>
-                        {(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}
-                    </button>
-                ))}
-            </div>
-            <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest transition">Close Deck</button>
+            <div className="flex justify-between items-start mb-6"><div><h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>{rosterGuild.isPrivate && (<div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl"><div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div><button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button></div>)}</div><button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button></div>
+            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{rosterGuild.members?.map((m, idx) => (<button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}><div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white shadow-lg group-hover:scale-110 transition">{String(m.name || 'O').charAt(0)}</div><div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>{(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}</button>))}</div>
+            <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Deck</button>
+          </div>
+        </div>
+      )}
+
+      {/* MODALS: FEEDBACK, DIRECTORY, MISSIONS */}
+      {isFeedbackModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
+          <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
+            {!feedbackSent ? (<><button onClick={() => setIsFeedbackModalOpen(false)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button><div className="text-center mb-10"><MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" /><h3 className="text-4xl font-black italic uppercase tracking-tighter">Submit Intelligence</h3></div><form onSubmit={handleSendFeedback} className="space-y-6"><textarea required placeholder="DESCRIBE ISSUE..." className={`w-full h-40 p-6 rounded-[2rem] ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase text-xs focus:border-indigo-500 transition shadow-inner resize-none`} value={feedbackMsg} onChange={e => setFeedbackMsg(e.target.value)} /><button type="submit" disabled={feedbackLoading} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>{feedbackLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} TRANSMIT REPORT</button></form></>) : (<div className="text-center py-20 animate-in fade-in zoom-in duration-500"><CheckCircle2 className="w-20 h-20 text-emerald-500 mx-auto mb-6 animate-bounce" /><h3 className="text-4xl font-black italic uppercase tracking-tighter text-emerald-500">Received</h3></div>)}
           </div>
         </div>
       )}
@@ -707,27 +686,9 @@ const App = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10"><h3 className="text-4xl font-black uppercase italic tracking-tighter">Directory</h3><button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button></div>
-            <div className="mb-10 p-6 rounded-[2.5rem] bg-indigo-600/10 border border-indigo-500/20">
-                <p className="text-[10px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Secure Enlistment</p>
-                <form onSubmit={joinPrivateGuild} className="flex gap-4"><input placeholder="ENTER INVITE CODE" className="flex-1 p-5 rounded-2xl bg-black/40 border border-indigo-500/30 outline-none text-xs font-black uppercase focus:border-indigo-500 transition text-white" value={inviteInput} onChange={e => setInviteInput(e.target.value.toUpperCase())} maxLength={6} /><button type="submit" className="px-8 py-5 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition">Enlist</button></form>
-                {inviteError && <p className="text-[9px] font-black text-rose-500 uppercase mt-3 ml-2">{inviteError}</p>}
-            </div>
-            <div className="space-y-4 max-h-[30vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
-              {guilds.map(g => (
-                <div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center group`}>
-                    <div className="flex-1"><div className="flex items-center gap-2"><p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>{g.isPrivate && <Lock className="w-3 h-3 opacity-30" />}</div><p className="text-[9px] font-black opacity-30 mt-1 uppercase">{g.members?.length || 0} Members</p></div>
-                    <div className="flex items-center gap-2">
-                        {g.isPrivate ? (<div className="px-6 py-3 rounded-2xl bg-slate-500/5 text-slate-400 text-[9px] font-black uppercase italic border border-white/5">Private</div>) : (<button onClick={() => handleToggleGuild(g)} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition active:scale-95 ${profile.joinedGuilds?.includes(g.id) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>{profile.joinedGuilds?.includes(g.id) ? 'Retire' : 'Enlist'}</button>)}
-                        {g.ownerId === user?.uid && <button onClick={() => disbandGuild(g.id)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white"><Skull className="w-4 h-4" /></button>}
-                    </div>
-                </div>
-              ))}
-            </div>
-            <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
-              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-indigo-600 bg-indigo-500/10 text-indigo-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private Sector' : 'Public Sector'}</span></button></div>
-              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button>
-            </div>
+            <div className="mb-10 p-6 rounded-[2.5rem] bg-indigo-600/10 border border-indigo-500/20"><p className="text-[10px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Secure Enlistment</p><form onSubmit={joinPrivateGuild} className="flex gap-4"><input placeholder="ENTER INVITE CODE" className="flex-1 p-5 rounded-2xl bg-black/40 border border-indigo-500/30 outline-none text-xs font-black uppercase focus:border-indigo-500 transition text-white" value={inviteInput} onChange={e => setInviteInput(e.target.value.toUpperCase())} maxLength={6} /><button type="submit" className="px-8 py-5 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest shadow-xl transition">Enlist</button></form>{inviteError && <p className="text-[9px] font-black text-rose-500 uppercase mt-3 ml-2">{inviteError}</p>}</div>
+            <div className="space-y-4 max-h-[30vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{guilds.map(g => (<div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center group`}><div className="flex-1"><div className="flex items-center gap-2"><p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>{g.isPrivate && <Lock className="w-3 h-3 opacity-30" />}</div><p className="text-[9px] font-black opacity-30 mt-1 uppercase">{g.members?.length || 0} Members</p></div><div className="flex items-center gap-2">{g.isPrivate ? (<div className="px-6 py-3 rounded-2xl bg-slate-500/5 text-slate-400 text-[9px] font-black uppercase italic border border-white/5">Private</div>) : (<button onClick={() => handleToggleGuild(g)} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition active:scale-95 ${profile.joinedGuilds?.includes(g.id) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>{profile.joinedGuilds?.includes(g.id) ? 'Retire' : 'Enlist'}</button>)}{g.ownerId === user?.uid && <button onClick={() => disbandGuild(g.id)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white"><Skull className="w-4 h-4" /></button>}</div></div>))}</div>
+            <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}><p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p><div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-indigo-600 bg-indigo-500/10 text-indigo-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private' : 'Public'}</span></button></div><button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest transition`}>Commission Registry</button></div>
           </div>
         </div>
       )}
@@ -736,20 +697,7 @@ const App = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-8"><h3 className="text-4xl font-black uppercase italic tracking-tighter">New Mission</h3><button onClick={() => setIsModalOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button></div>
-            <form onSubmit={handleSubmitSession} className="space-y-6">
-              <input placeholder="GAME / OPERATION NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
-                <input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
-                <div className="relative"><Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="HR" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} /></div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required><option value="">Select Guild</option>{guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (<option key={g.id} value={g.id}>{String(g.name)}</option>))}</select>
-                <div className="relative"><UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="SLOTS" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} /></div>
-              </div>
-              <div className={`${activeTheme.bg} p-6 rounded-3xl border ${activeTheme.border} flex items-center justify-between`}><div className="flex items-center gap-4"><Video className="w-5 h-5 opacity-40" /><div><p className="text-[11px] font-black uppercase tracking-widest">Broadcast Mission</p></div></div><button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}><div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div></button></div>
-              <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Deploy Mission</button>
-            </form>
+            <form onSubmit={handleSubmitSession} className="space-y-6"><input placeholder="GAME / OPERATION NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required /><div className="grid grid-cols-1 md:grid-cols-3 gap-6"><input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} /><input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} /><div className="relative"><Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="HR" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} /></div></div><div className="grid grid-cols-1 sm:grid-cols-2 gap-6"><select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required><option value="">Select Guild</option>{guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (<option key={g.id} value={g.id}>{String(g.name)}</option>))}</select><div className="relative"><UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="SLOTS" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} /></div></div><div className={`${activeTheme.bg} p-6 rounded-3xl border ${activeTheme.border} flex items-center justify-between`}><div className="flex items-center gap-4"><Video className="w-5 h-5 opacity-40" /><div><p className="text-[11px] font-black uppercase tracking-widest">Broadcast Mission</p></div></div><button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}><div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div></button></div><button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Deploy Mission</button></form>
           </div>
         </div>
       )}
