@@ -72,10 +72,19 @@ import {
   UserMinus,
   Bell,
   Check,
-  UserX
+  UserX,
+  ImageIcon
 } from 'lucide-react';
 
-// --- PRODUCTION CONFIGURATION ---
+// --- CONFIGURATION & THEMES ---
+const THEMES = {
+  light: { id: 'light', bg: 'bg-slate-50', card: 'bg-white', header: 'bg-white', accent: 'text-indigo-600', border: 'border-slate-100', text: 'text-slate-900', muted: 'text-slate-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' },
+  dark: { id: 'dark', bg: 'bg-zinc-950', card: 'bg-zinc-900', header: 'bg-zinc-900', accent: 'text-indigo-400', border: 'border-zinc-800', text: 'text-zinc-100', muted: 'text-zinc-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' }
+};
+
+const SUPPORT_EMAIL = "your-email@example.com";
+
+// --- FIREBASE INITIALIZATION ---
 const manualFirebaseConfig = {
   apiKey: "AIzaSyDFHW-ZV5HPxGNJlwbi4Ravrs0tnyRW3Eg",
   authDomain: "gamesync-7fdde.firebaseapp.com",
@@ -84,8 +93,6 @@ const manualFirebaseConfig = {
   messagingSenderId: "209595978385",
   appId: "1:209595978385:web:804bf3167a353073be2530"
 };
-
-const SUPPORT_EMAIL = "your-email@example.com";
 
 const getFirebaseConfig = () => {
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
@@ -124,13 +131,13 @@ const Avatar = ({ src, name, size = "md", className = "" }) => {
         xl: "w-32 h-32 text-4xl"
     };
     
-    if (src && src.startsWith('http')) {
+    if (src && typeof src === 'string' && src.startsWith('http')) {
         return <img src={src} alt={name} className={`${sizeClasses[size]} rounded-2xl object-cover border border-white/10 shadow-md ${className}`} onError={(e) => { e.target.src = ''; e.target.onerror = null; }} />;
     }
     
     return (
         <div className={`${sizeClasses[size]} rounded-2xl bg-indigo-600 flex items-center justify-center text-white font-black uppercase shadow-lg border border-white/10 ${className}`}>
-            {name ? name.charAt(0) : '?'}
+            {name && typeof name === 'string' ? name.charAt(0) : '?'}
         </div>
     );
 };
@@ -181,7 +188,8 @@ const App = () => {
     handles: { steam: '', psn: '', xbox: '', youtube: '', twitch: '', kick: '' },
     showcaseGames: ['', '', '', '', '']
   });
-  const activeTheme = THEMES[profile.theme] || THEMES.light;
+  
+  const activeTheme = useMemo(() => THEMES[profile.theme] || THEMES.light, [profile.theme]);
 
   const [formData, setFormData] = useState({
     gameTitle: '',
@@ -236,7 +244,6 @@ const App = () => {
     const unsubProfile = onSnapshot(profileRef, (snap) => {
       if (snap.exists()) setProfile(prev => ({ ...prev, ...snap.data() }));
     });
-    // Listen for Tactical Notifications (Requests)
     const unsubNotifs = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'notifications'), (snap) => {
         setNotifications(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
@@ -285,7 +292,6 @@ const App = () => {
     }
   };
 
-  // --- IDENTITY & DATA PERSISTENCE ---
   const saveProfile = async (data) => {
     if (!user || !db) return;
     setProfileSaving(true);
@@ -338,10 +344,8 @@ const App = () => {
     }
   };
 
-  // --- FRIENDS & NOTIFICATION HANDLERS ---
   const sendFriendRequest = async (targetUser) => {
     if (!user || !db) return;
-    // Send notification to target user's private folder
     await addDoc(collection(db, 'artifacts', appId, 'users', targetUser.uid, 'notifications'), {
         type: 'friend_request',
         senderUid: user.uid,
@@ -355,23 +359,16 @@ const App = () => {
     if (!user || !db) return;
     const batch = writeBatch(db);
 
-    // 1. Add to my friends
     const myProfileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
     batch.update(myProfileRef, {
         friends: arrayUnion({ uid: notif.senderUid, name: notif.senderName, photoURL: notif.senderPhotoURL || '' })
     });
 
-    // 2. Add to sender's friends
     const theirProfileRef = doc(db, 'artifacts', appId, 'users', notif.senderUid, 'profile', 'info');
     batch.update(theirProfileRef, {
         friends: arrayUnion({ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' })
     });
 
-    // 3. Update public directories
-    const myDirRef = doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid);
-    batch.set(myDirRef, { uid: user.uid }, { merge: true }); // Triggers refresh in UI
-
-    // 4. Delete the notification
     const notifRef = doc(db, 'artifacts', appId, 'users', user.uid, 'notifications', notif.id);
     batch.delete(notifRef);
 
@@ -382,18 +379,10 @@ const App = () => {
     if (!user || !db) return;
     const friend = profile.friends?.find(f => f.uid === friendUid);
     if (!friend) return;
-
     const batch = writeBatch(db);
-    // Remove from mine
-    batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'), {
-        friends: arrayRemove(friend)
-    });
-    // Remove from theirs (best effort)
+    batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'), { friends: arrayRemove(friend) });
     const theirRef = doc(db, 'artifacts', appId, 'users', friendUid, 'profile', 'info');
-    batch.update(theirRef, {
-        friends: arrayRemove({ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' })
-    });
-
+    batch.update(theirRef, { friends: arrayRemove({ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }) });
     await batch.commit();
   };
 
@@ -454,6 +443,17 @@ const App = () => {
       if (participants.length >= (Number(session.maxOpenings) || 0) + 1) return;
       const updated = [...participants, { uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }];
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
+    }
+  };
+
+  const openPublicProfile = async (targetUid) => {
+    if (!db) return;
+    setProfileLoading(true);
+    try {
+        const snap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', targetUid));
+        if (snap.exists()) setViewingProfile(snap.data());
+    } finally {
+        setProfileLoading(false);
     }
   };
 
@@ -577,7 +577,6 @@ const App = () => {
           <button onClick={() => setCurrentView('calendar')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'calendar' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Hub</button>
           <button onClick={() => setCurrentView('profile')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'profile' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Profile</button>
           
-          {/* NOTIFICATION TRIGGER */}
           <button onClick={() => setIsNotifOpen(!isNotifOpen)} className="relative p-2 opacity-40 hover:text-indigo-500 transition">
               <Bell className="w-5 h-5" />
               {notifications.length > 0 && <div className="absolute top-0 right-0 w-2 h-2 bg-rose-500 rounded-full animate-ping"></div>}
@@ -588,7 +587,6 @@ const App = () => {
         </nav>
       </header>
 
-      {/* NOTIFICATION FEED POPUP */}
       {isNotifOpen && (
           <div className={`fixed top-20 right-8 z-[100] w-80 ${activeTheme.card} border ${activeTheme.border} rounded-3xl shadow-2xl p-6 animate-in slide-in-from-top-4 duration-300`}>
               <div className="flex justify-between items-center mb-6">
@@ -646,8 +644,11 @@ const App = () => {
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                       {daySessions.map(session => (
                         <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:-translate-y-1 group relative overflow-hidden flex flex-col`}>
-                          <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors mb-4">{String(session.gameTitle)}</h4>
-                          <div className="flex flex-wrap gap-4 mb-6 opacity-40"><div className="flex items-center gap-2"><Clock className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{String(session.startTime)}</span></div><div className="flex items-center gap-2"><Timer className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{session.duration} HR</span></div></div>
+                          <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors leading-tight mb-4">{String(session.gameTitle)}</h4>
+                          <div className="flex flex-wrap gap-4 mb-6 opacity-40">
+                              <div className="flex items-center gap-2"><Clock className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{String(session.startTime)}</span></div>
+                              <div className="flex items-center gap-2"><Timer className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{session.duration} HR</span></div>
+                          </div>
                           <div className="mb-8 flex-1">
                             <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-4">{session.participants?.length || 0} / {(Number(session.maxOpenings) || 0) + 1} Enlisted</p>
                             <div className="flex flex-wrap gap-2">
@@ -692,7 +693,6 @@ const App = () => {
                         <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-6 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
                             {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} SYNC PROFILE
                         </button>
-                        
                         <div className="mt-12">
                             <button onClick={() => setShowDeleteConfirm(true)} className="text-[10px] font-black uppercase text-rose-500 opacity-40 hover:opacity-100 transition tracking-widest underline decoration-dotted underline-offset-4">Terminate Identity</button>
                         </div>
@@ -719,7 +719,6 @@ const App = () => {
                 </div>
               </div>
 
-              {/* FRIENDS LIST SECTION */}
               <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 shadow-xl`}>
                 <p className="text-[11px] font-black uppercase opacity-30 mb-8 tracking-widest flex items-center gap-2"><Users className="w-4 h-4" /> Enlisted Allies ({profile.friends?.length || 0})</p>
                 {profile.friends?.length > 0 ? (
@@ -743,44 +742,20 @@ const App = () => {
         </div>
       </main>
 
-      {/* TERMINATION MODAL */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/98 backdrop-blur-xl">
             <div className="bg-zinc-900 border border-rose-500/30 rounded-[5rem] p-12 max-w-lg w-full text-center shadow-2xl relative overflow-hidden">
                 <AlertTriangle className="w-16 h-16 text-rose-500 mx-auto mb-6 animate-pulse" />
                 <h3 className="text-4xl font-black italic uppercase tracking-tighter text-rose-500 mb-2">Final Warning</h3>
-                <p className="text-[11px] font-black uppercase text-white/40 tracking-widest leading-relaxed mb-10">This will permanently terminate your operator identity and purge your registry handle.</p>
+                <p className="text-[11px] font-black uppercase text-white/40 tracking-widest leading-relaxed mb-10">Permanently terminate your identity? Registry will be purged.</p>
                 <div className="space-y-4">
-                    <button onClick={handleTerminateAccount} disabled={deleteLoading} className="w-full py-6 rounded-3xl bg-rose-600 text-white font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition">Confirm Termination</button>
+                    <button onClick={handleTerminateAccount} disabled={deleteLoading} className="w-full py-6 rounded-3xl bg-rose-600 text-white font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition">Confirm</button>
                     <button onClick={() => setShowDeleteConfirm(false)} className="w-full py-6 rounded-3xl bg-white/5 border border-white/10 text-white font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition">Cancel</button>
                 </div>
             </div>
         </div>
       )}
 
-      {/* FEEDBACK MODAL */}
-      {isFeedbackModalOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
-          <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
-            {!feedbackSent ? (
-                <>
-                    <button onClick={() => setIsFeedbackModalOpen(false)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
-                    <div className="text-center mb-10"><MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" /><h3 className="text-4xl font-black italic uppercase tracking-tighter">Submit Intelligence</h3></div>
-                    <form onSubmit={handleSendFeedback} className="space-y-6">
-                        <textarea required placeholder="DESCRIBE ISSUE..." className={`w-full h-40 p-6 rounded-[2rem] ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase text-xs focus:border-indigo-500 transition shadow-inner resize-none`} value={feedbackMsg} onChange={e => setFeedbackMsg(e.target.value)} />
-                        <button type="submit" disabled={feedbackLoading} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-2`}>
-                            {feedbackLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} TRANSMIT REPORT
-                        </button>
-                    </form>
-                </>
-            ) : (
-                <div className="text-center py-20 animate-in fade-in zoom-in duration-500"><CheckCircle2 className="w-20 h-20 text-emerald-500 mx-auto mb-6 animate-bounce" /><h3 className="text-4xl font-black italic uppercase tracking-tighter text-emerald-500">Received</h3></div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* PUBLIC INTEL DECK (Profile Viewer) */}
       {viewingProfile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
           <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
@@ -789,82 +764,38 @@ const App = () => {
                 <Avatar src={viewingProfile.photoURL} name={viewingProfile.displayName} size="xl" className="mx-auto mb-6" />
                 <h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3>
             </div>
-
-            {/* FRIEND PROTOCOL ACTIONS */}
             {viewingProfile.uid !== user?.uid && (
                 <div className="flex justify-center mb-10">
                     {profile.friends?.some(f => f.uid === viewingProfile.uid) ? (
-                        <button 
-                            onClick={() => removeFriend(viewingProfile.uid)}
-                            className="px-10 py-4 rounded-2xl bg-rose-500/10 text-rose-500 border border-rose-500/20 font-black uppercase text-[10px] tracking-widest flex items-center gap-2 active:scale-95 transition"
-                        >
-                            <UserMinus className="w-4 h-4" /> Remove Ally
-                        </button>
+                        <button onClick={() => removeFriend(viewingProfile.uid)} className="px-10 py-4 rounded-2xl bg-rose-500/10 text-rose-500 border border-rose-500/20 font-black uppercase text-[10px] tracking-widest flex items-center gap-2 active:scale-95 transition"><UserMinus className="w-4 h-4" /> Remove Ally</button>
                     ) : (
-                        <button 
-                            onClick={() => sendFriendRequest(viewingProfile)}
-                            disabled={notifications.some(n => n.senderUid === viewingProfile.uid)}
-                            className="px-10 py-4 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest flex items-center gap-2 active:scale-95 transition shadow-xl disabled:opacity-50"
-                        >
-                            <UserPlus className="w-4 h-4" /> Enlist Ally
-                        </button>
+                        <button onClick={() => sendFriendRequest(viewingProfile)} disabled={notifications.some(n => n.senderUid === viewingProfile.uid)} className="px-10 py-4 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest flex items-center gap-2 active:scale-95 transition shadow-xl disabled:opacity-50"><UserPlus className="w-4 h-4" /> Enlist Ally</button>
                     )}
                 </div>
             )}
-
-            <div className="grid grid-cols-3 gap-4 mb-10">
-                {Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (<div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>))}
-            </div>
-            <div className="space-y-2">
-                <p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>
-                {viewingProfile.showcaseGames?.map((game, idx) => game && (<div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4"><span className="text-[9px] font-black opacity-20">0{idx+1}</span><span className="text-xs font-black uppercase tracking-tight italic">{game}</span></div>))}
-            </div>
+            <div className="grid grid-cols-3 gap-4 mb-10">{Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (<div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>))}</div>
+            <div className="space-y-2"><p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>{viewingProfile.showcaseGames?.map((game, idx) => game && (<div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4"><span className="text-[9px] font-black opacity-20">0{idx+1}</span><span className="text-xs font-black uppercase tracking-tight italic">{game}</span></div>))}</div>
           </div>
         </div>
       )}
 
-      {/* ROSTER MODAL */}
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
-            <div className="flex justify-between items-start mb-6">
-                <div>
-                    <h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>
-                    {rosterGuild.isPrivate && (
-                        <div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl">
-                            <div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div>
-                            <button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button>
-                        </div>
-                    )}
-                </div>
-                <button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button>
-            </div>
-            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
-                {rosterGuild.members?.map((m, idx) => (
-                    <button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}>
-                        <Avatar src={m.photoURL} name={m.name} size="md" className="group-hover:scale-110 transition" />
-                        <div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>
-                        {(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}
-                    </button>
-                ))}
-            </div>
+            <div className="flex justify-between items-start mb-6"><div><h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>{rosterGuild.isPrivate && (<div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl"><div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div><button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button></div>)}</div><button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button></div>
+            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{rosterGuild.members?.map((m, idx) => (<button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}><Avatar src={m.photoURL} name={m.name} size="md" className="group-hover:scale-110 transition" /><div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>{(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}</button>))}</div>
             <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Roster</button>
           </div>
         </div>
       )}
 
-      {/* GUILD DIRECTORY MODAL */}
       {isGuildModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10"><h3 className="text-4xl font-black uppercase italic tracking-tighter">Directory</h3><button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button></div>
             <div className="mb-10 p-6 rounded-[2.5rem] bg-indigo-600/10 border border-indigo-500/20"><p className="text-[10px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Secure Enlistment</p><form onSubmit={joinPrivateGuild} className="flex gap-4"><input placeholder="ENTER INVITE CODE" className="flex-1 p-5 rounded-2xl bg-black/40 border border-indigo-500/30 outline-none text-xs font-black uppercase focus:border-indigo-500 transition text-white" value={inviteInput} onChange={e => setInviteInput(e.target.value.toUpperCase())} maxLength={6} /><button type="submit" className="px-8 py-5 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest shadow-xl transition">Enlist</button></form>{inviteError && <p className="text-[9px] font-black text-rose-500 uppercase mt-3 ml-2">{inviteError}</p>}</div>
             <div className="space-y-4 max-h-[30vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{guilds.map(g => (<div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center group`}><div className="flex-1"><div className="flex items-center gap-2"><p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>{g.isPrivate && <Lock className="w-3 h-3 opacity-30" />}</div><p className="text-[9px] font-black opacity-30 mt-1 uppercase">{g.members?.length || 0} Members</p></div><div className="flex items-center gap-2">{g.isPrivate ? (<div className="px-6 py-3 rounded-2xl bg-slate-500/5 text-slate-400 text-[9px] font-black uppercase italic border border-white/5">Private</div>) : (<button onClick={() => handleToggleGuild(g)} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition active:scale-95 ${profile.joinedGuilds?.includes(g.id) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>{profile.joinedGuilds?.includes(g.id) ? 'Retire' : 'Enlist'}</button>)}{g.ownerId === user?.uid && <button onClick={() => disbandGuild(g.id)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white"><Skull className="w-4 h-4" /></button>}</div></div>))}</div>
-            <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
-              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-indigo-600 bg-indigo-500/10 text-indigo-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private' : 'Public'}</span></button></div>
-              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button>
-            </div>
+            <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}><p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p><div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-indigo-600 bg-indigo-500/10 text-indigo-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private' : 'Public'}</span></button></div><button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button></div>
           </div>
         </div>
       )}
