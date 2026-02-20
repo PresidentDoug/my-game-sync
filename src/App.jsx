@@ -15,7 +15,8 @@ import {
   where,
   serverTimestamp,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  writeBatch
 } from 'firebase/firestore';
 import { 
   getAuth, 
@@ -122,18 +123,15 @@ const App = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
   
-  // Interaction State
   const [rosterGuild, setRosterGuild] = useState(null); 
   const [viewingProfile, setViewingProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
 
-  // Feedback State
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState('');
   const [feedbackLoading, setFeedbackLoading] = useState(false);
 
-  // Private Guild Join State
   const [inviteInput, setInviteInput] = useState('');
   const [inviteError, setInviteError] = useState(null);
 
@@ -221,18 +219,71 @@ const App = () => {
     }
   };
 
+  // --- IDENTITY PROPAGATION ENGINE ---
   const saveProfile = async (data) => {
     if (!user || !db) return;
     setProfileSaving(true);
-    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'), data, { merge: true });
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid), {
-        displayName: data.displayName,
-        handles: data.handles || {},
-        showcaseGames: data.showcaseGames || [],
-        theme: data.theme || 'light',
-        uid: user.uid
-    }, { merge: true });
-    setTimeout(() => setProfileSaving(false), 500);
+    
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Update Private Info
+      const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
+      batch.set(profileRef, data, { merge: true });
+      
+      // 2. Update Public User Directory (Reference Table)
+      const dirRef = doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid);
+      batch.set(dirRef, {
+          displayName: data.displayName,
+          handles: data.handles || {},
+          showcaseGames: data.showcaseGames || [],
+          theme: data.theme || 'light',
+          uid: user.uid
+      }, { merge: true });
+
+      // 3. PROPAGATE NAME CHANGE TO GUILDS
+      guilds.forEach(guild => {
+        const memberIdx = guild.members?.findIndex(m => (m.uid || m) === user.uid);
+        if (memberIdx !== -1) {
+          const updatedMembers = [...guild.members];
+          updatedMembers[memberIdx] = { uid: user.uid, name: data.displayName };
+          const gRef = doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id);
+          batch.update(gRef, { members: updatedMembers });
+        }
+      });
+
+      // 4. PROPAGATE NAME CHANGE TO SESSIONS
+      sessions.forEach(session => {
+        let needsUpdate = false;
+        const updateData = {};
+
+        // Update if Creator
+        if (session.userId === user.uid) {
+          updateData.userName = data.displayName;
+          needsUpdate = true;
+        }
+
+        // Update if Participant
+        const partIdx = session.participants?.findIndex(p => p.uid === user.uid);
+        if (partIdx !== -1) {
+          const updatedParticipants = [...session.participants];
+          updatedParticipants[partIdx] = { uid: user.uid, name: data.displayName };
+          updateData.participants = updatedParticipants;
+          needsUpdate = true;
+        }
+
+        if (needsUpdate) {
+          const sRef = doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id);
+          batch.update(sRef, updateData);
+        }
+      });
+
+      await batch.commit();
+    } catch (err) {
+      console.error("Propagation Failure:", err);
+    } finally {
+      setTimeout(() => setProfileSaving(false), 800);
+    }
   };
 
   const openPublicProfile = async (targetUid) => {
@@ -280,8 +331,6 @@ const App = () => {
     await deleteGuildSessions(gId);
   };
 
-  // --- PRIVATE GUILD ENGINE ---
-
   const generateInviteCode = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
@@ -292,7 +341,6 @@ const App = () => {
   const createGuild = async () => {
     if (!newGuild.name || !user || !db) return;
     const inviteCode = newGuild.isPrivate ? generateInviteCode() : null;
-    
     const gRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'guilds'), { 
       name: newGuild.name, 
       desc: newGuild.desc || "Active Tactical Sector",
@@ -302,7 +350,6 @@ const App = () => {
       inviteCode: inviteCode,
       createdAt: serverTimestamp() 
     });
-    
     const updatedJoined = [...(profile.joinedGuilds || []), gRef.id];
     await saveProfile({ ...profile, joinedGuilds: updatedJoined });
     setNewGuild({ name: '', desc: '', isPrivate: false });
@@ -313,25 +360,14 @@ const App = () => {
     e.preventDefault();
     if (!inviteInput || !db || !user) return;
     setInviteError(null);
-    
     const targetCode = inviteInput.toUpperCase().trim();
     const guildToJoin = guilds.find(g => g.inviteCode === targetCode);
-    
-    if (!guildToJoin) {
-      setInviteError("INVALID SECTOR CODE");
-      return;
-    }
-    
-    if (profile.joinedGuilds?.includes(guildToJoin.id)) {
-      setInviteError("ALREADY ENLISTED IN SECTOR");
-      return;
-    }
-
+    if (!guildToJoin) { setInviteError("INVALID SECTOR CODE"); return; }
+    if (profile.joinedGuilds?.includes(guildToJoin.id)) { setInviteError("ALREADY ENLISTED"); return; }
     await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), guildToJoin.id] });
     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), {
       members: arrayUnion({ uid: user.uid, name: profile.displayName })
     });
-    
     setInviteInput('');
     setActiveGuildId(guildToJoin.id);
   };
@@ -341,9 +377,7 @@ const App = () => {
     const joinedList = profile.joinedGuilds || [];
     const isEnlisted = joinedList.includes(guild.id);
     const members = guild.members || [];
-
     if (isEnlisted) {
-      // RETIRE LOGIC
       const newJoined = joinedList.filter(id => id !== guild.id);
       await saveProfile({ ...profile, joinedGuilds: newJoined });
       const remainingMembers = members.filter(m => (m.uid || m) !== user.uid);
@@ -352,17 +386,12 @@ const App = () => {
           await deleteGuildSessions(guild.id);
       } else {
           const memberToRemove = members.find(m => (m.uid || m) === user.uid);
-          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), {
-            members: arrayRemove(memberToRemove)
-          });
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: arrayRemove(memberToRemove) });
       }
     } else {
-      // ENLIST LOGIC (Public Only)
-      if (guild.isPrivate) return; // Prevent direct join for private guilds
+      if (guild.isPrivate) return;
       await saveProfile({ ...profile, joinedGuilds: [...joinedList, guild.id] });
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), {
-        members: arrayUnion({ uid: user.uid, name: profile.displayName })
-      });
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName }) });
     }
   };
 
@@ -370,8 +399,7 @@ const App = () => {
     if (!db || !user) return;
     const participants = session.participants || [];
     const isJoined = participants.some(p => p.uid === user.uid);
-    const capacity = Number(session.maxOpenings || 0) + 1;
-
+    const capacity = Number(session.maxOpenings) + 1;
     if (isJoined) {
       const updated = participants.filter(p => p.uid !== user.uid);
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
@@ -410,7 +438,7 @@ const App = () => {
     return groups;
   }, [sessions, activeGuildId, profile.joinedGuilds, searchTerm]);
 
-  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Update Firebase keys in App.jsx.</p></div>;
+  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Check Firebase keys in App.jsx.</p></div>;
   if (authLoading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Gamepad2 className="w-12 h-12 text-indigo-500 animate-bounce" /></div>;
 
   if (!user) {
@@ -526,11 +554,11 @@ const App = () => {
                         <div className="w-32 h-32 mx-auto mb-8 rounded-[3rem] bg-indigo-600 flex items-center justify-center text-white text-5xl font-black shadow-2xl">{profile.displayName.charAt(0)}</div>
                         <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} className="w-full bg-transparent text-center text-3xl font-black italic uppercase outline-none focus:text-indigo-600 transition" />
                         <div className="mt-12 space-y-4">
-                            <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`w-full p-4 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4" /><span className="text-[10px] font-black uppercase">Standard</span></button>
-                            <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`w-full p-4 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4" /><span className="text-[10px] font-black uppercase">Midnight</span></button>
+                            <button onClick={() => setProfile({...profile, theme: 'light'})} className={`w-full p-4 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4" /><span className="text-[10px] font-black uppercase">Standard</span></button>
+                            <button onClick={() => setProfile({...profile, theme: 'dark'})} className={`w-full p-4 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4" /><span className="text-[10px] font-black uppercase">Midnight</span></button>
                         </div>
-                        <button onClick={() => saveProfile(profile)} className={`w-full mt-10 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
-                            {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} SYNC PROFILE
+                        <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-10 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
+                            {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} {profileSaving ? "SYNCING..." : "SYNC PROFILE"}
                         </button>
                         <button onClick={() => setIsFeedbackModalOpen(true)} className="w-full mt-4 text-[10px] font-black uppercase opacity-40 hover:opacity-100 transition tracking-widest flex items-center justify-center gap-2 underline underline-offset-4 decoration-dotted"><MessageSquare className="w-3 h-3" /> Report Issue / Feedback</button>
                     </div>
@@ -572,17 +600,14 @@ const App = () => {
         </div>
       </main>
 
-      {/* FEEDBACK MODAL */}
+      {/* MODALS */}
       {isFeedbackModalOpen && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
             {!feedbackSent ? (
                 <>
                     <button onClick={() => setIsFeedbackModalOpen(false)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
-                    <div className="text-center mb-10">
-                        <MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" />
-                        <h3 className="text-4xl font-black italic uppercase tracking-tighter">Submit Intelligence</h3>
-                    </div>
+                    <div className="text-center mb-10"><MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" /><h3 className="text-4xl font-black italic uppercase tracking-tighter">Report Intelligence</h3></div>
                     <form onSubmit={handleSendFeedback} className="space-y-6">
                         <textarea required placeholder="DESCRIBE ISSUE..." className={`w-full h-40 p-6 rounded-[2rem] ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase text-xs focus:border-indigo-500 transition shadow-inner resize-none`} value={feedbackMsg} onChange={e => setFeedbackMsg(e.target.value)} />
                         <button type="submit" disabled={feedbackLoading} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-2`}>
@@ -591,16 +616,12 @@ const App = () => {
                     </form>
                 </>
             ) : (
-                <div className="text-center py-20 animate-in fade-in zoom-in duration-500">
-                    <CheckCircle2 className="w-20 h-20 text-emerald-500 mx-auto mb-6 animate-bounce" />
-                    <h3 className="text-4xl font-black italic uppercase tracking-tighter text-emerald-500">Received</h3>
-                </div>
+                <div className="text-center py-20 animate-in fade-in zoom-in duration-500"><CheckCircle2 className="w-20 h-20 text-emerald-500 mx-auto mb-6 animate-bounce" /><h3 className="text-4xl font-black italic uppercase tracking-tighter text-emerald-500">Received</h3></div>
             )}
           </div>
         </div>
       )}
 
-      {/* PUBLIC INTEL DECK (Profile Viewer) */}
       {viewingProfile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
           <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
@@ -611,27 +632,20 @@ const App = () => {
             </div>
             <div className="grid grid-cols-3 gap-4 mb-10">
                 {Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (
-                    <div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center">
-                        <p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p>
-                        <p className="text-[9px] font-black uppercase truncate">{val}</p>
-                    </div>
+                    <div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>
                 ))}
             </div>
             <div className="space-y-2">
                 <p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>
                 {viewingProfile.showcaseGames?.map((game, idx) => game && (
-                    <div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4">
-                        <span className="text-[9px] font-black opacity-20">0{idx+1}</span>
-                        <span className="text-xs font-black uppercase tracking-tight italic">{game}</span>
-                    </div>
+                    <div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4"><span className="text-[9px] font-black opacity-20">0{idx+1}</span><span className="text-xs font-black uppercase tracking-tight italic">{game}</span></div>
                 ))}
             </div>
-            <button onClick={() => setViewingProfile(null)} className="w-full mt-10 py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Intel</button>
+            <button onClick={() => setViewingProfile(null)} className="w-full mt-10 py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Intel Deck</button>
           </div>
         </div>
       )}
 
-      {/* ROSTER MODAL */}
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
@@ -639,12 +653,9 @@ const App = () => {
                 <div>
                     <h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>
                     {rosterGuild.isPrivate && (
-                        <div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl animate-in fade-in slide-in-from-left-4 duration-500">
-                            <div>
-                                <p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p>
-                                <p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p>
-                            </div>
-                            <button onClick={() => { navigator.clipboard.writeText(rosterGuild.inviteCode); }} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg active:scale-90 transition"><Copy className="w-4 h-4" /></button>
+                        <div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl">
+                            <div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div>
+                            <button onClick={() => { navigator.clipboard.writeText(rosterGuild.inviteCode); }} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button>
                         </div>
                     )}
                 </div>
@@ -654,10 +665,7 @@ const App = () => {
                 {rosterGuild.members?.map((m, idx) => (
                     <button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}>
                         <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white shadow-lg group-hover:scale-110 transition">{String(m.name || 'O').charAt(0)}</div>
-                        <div className="flex-1 overflow-hidden">
-                            <p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p>
-                            <p className="text-[8px] opacity-20 font-bold truncate">{m.uid || m}</p>
-                        </div>
+                        <div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p><p className="text-[8px] opacity-20 font-bold truncate">{m.uid || m}</p></div>
                         {(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}
                     </button>
                 ))}
@@ -667,76 +675,39 @@ const App = () => {
         </div>
       )}
 
-      {/* GUILD DIRECTORY MODAL */}
       {isGuildModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
-            <div className="flex justify-between items-start mb-10">
-              <h3 className="text-4xl font-black uppercase italic tracking-tighter">Directory</h3>
-              <button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button>
-            </div>
-
-            {/* JOIN VIA CODE SECTION */}
+            <div className="flex justify-between items-start mb-10"><h3 className="text-4xl font-black uppercase italic tracking-tighter">Directory</h3><button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button></div>
             <div className="mb-10 p-6 rounded-[2.5rem] bg-indigo-600/10 border border-indigo-500/20">
                 <p className="text-[10px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Secure Enlistment</p>
-                <form onSubmit={joinPrivateGuild} className="flex gap-4">
-                    <input placeholder="ENTER INVITE CODE" className="flex-1 p-5 rounded-2xl bg-black/40 border border-indigo-500/30 outline-none text-xs font-black uppercase focus:border-indigo-500 transition text-white" value={inviteInput} onChange={e => setInviteInput(e.target.value.toUpperCase())} maxLength={6} />
-                    <button type="submit" className="px-8 py-5 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition">Enlist</button>
-                </form>
+                <form onSubmit={joinPrivateGuild} className="flex gap-4"><input placeholder="ENTER INVITE CODE" className="flex-1 p-5 rounded-2xl bg-black/40 border border-indigo-500/30 outline-none text-xs font-black uppercase focus:border-indigo-500 transition text-white" value={inviteInput} onChange={e => setInviteInput(e.target.value.toUpperCase())} maxLength={6} /><button type="submit" className="px-8 py-5 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition">Enlist</button></form>
                 {inviteError && <p className="text-[9px] font-black text-rose-500 uppercase mt-3 ml-2">{inviteError}</p>}
             </div>
-
             <div className="space-y-4 max-h-[30vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
               {guilds.map(g => (
                 <div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center group`}>
-                    <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                            <p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>
-                            {g.isPrivate && <Lock className="w-3 h-3 opacity-30" />}
-                        </div>
-                        <p className="text-[9px] font-black opacity-30 mt-1 uppercase">{g.members?.length || 0} Members</p>
-                    </div>
+                    <div className="flex-1"><div className="flex items-center gap-2"><p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>{g.isPrivate && <Lock className="w-3 h-3 opacity-30" />}</div><p className="text-[9px] font-black opacity-30 mt-1 uppercase">{g.members?.length || 0} Members</p></div>
                     <div className="flex items-center gap-2">
-                        {g.isPrivate ? (
-                            <div className="px-6 py-3 rounded-2xl bg-slate-500/5 text-slate-400 text-[9px] font-black uppercase italic border border-white/5">Private</div>
-                        ) : (
-                            <button onClick={() => handleToggleGuild(g)} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition active:scale-95 ${profile.joinedGuilds?.includes(g.id) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>
-                              {profile.joinedGuilds?.includes(g.id) ? 'Retire' : 'Enlist'}
-                            </button>
-                        )}
+                        {g.isPrivate ? (<div className="px-6 py-3 rounded-2xl bg-slate-500/5 text-slate-400 text-[9px] font-black uppercase italic border border-white/5">Private</div>) : (<button onClick={() => handleToggleGuild(g)} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition active:scale-95 ${profile.joinedGuilds?.includes(g.id) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>{profile.joinedGuilds?.includes(g.id) ? 'Retire' : 'Enlist'}</button>)}
                         {g.ownerId === user?.uid && <button onClick={() => disbandGuild(g.id)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white"><Skull className="w-4 h-4" /></button>}
                     </div>
                 </div>
               ))}
             </div>
-
             <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
               <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} />
-                <button 
-                    type="button"
-                    onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})}
-                    className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-indigo-600 bg-indigo-500/10 text-indigo-400' : 'border-slate-500/20 opacity-40'}`}
-                >
-                    {newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-                    <span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private Sector' : 'Public Sector'}</span>
-                </button>
-              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-indigo-600 bg-indigo-500/10 text-indigo-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private Sector' : 'Public Sector'}</span></button></div>
               <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Sector</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* NEW MISSION MODAL */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
-            <div className="flex justify-between items-start mb-8">
-              <h3 className="text-4xl font-black uppercase italic tracking-tighter">New Mission</h3>
-              <button onClick={() => setIsModalOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button>
-            </div>
+            <div className="flex justify-between items-start mb-8"><h3 className="text-4xl font-black uppercase italic tracking-tighter">New Mission</h3><button onClick={() => setIsModalOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button></div>
             <form onSubmit={handleSubmitSession} className="space-y-6">
               <input placeholder="GAME / OPERATION NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -745,15 +716,10 @@ const App = () => {
                 <div className="relative"><Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="HR" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} /></div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
-                    <option value="">Select Guild</option>{guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (<option key={g.id} value={g.id}>{String(g.name)}</option>))}
-                </select>
+                <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required><option value="">Select Guild</option>{guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (<option key={g.id} value={g.id}>{String(g.name)}</option>))}</select>
                 <div className="relative"><UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="SLOTS" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} /></div>
               </div>
-              <div className={`${activeTheme.bg} p-6 rounded-3xl border ${activeTheme.border} flex items-center justify-between`}>
-                <div className="flex items-center gap-4"><Video className="w-5 h-5 opacity-40" /><div><p className="text-[11px] font-black uppercase tracking-widest">Broadcast Mission</p></div></div>
-                <button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}><div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div></button>
-              </div>
+              <div className={`${activeTheme.bg} p-6 rounded-3xl border ${activeTheme.border} flex items-center justify-between`}><div className="flex items-center gap-4"><Video className="w-5 h-5 opacity-40" /><div><p className="text-[11px] font-black uppercase tracking-widest">Broadcast Mission</p></div></div><button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}><div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div></button></div>
               <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Deploy Mission</button>
             </form>
           </div>
