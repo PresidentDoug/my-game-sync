@@ -69,7 +69,10 @@ import {
   Hash,
   ShieldAlert,
   AlertTriangle,
-  UserMinus
+  UserMinus,
+  Heart,
+  UserCheck,
+  Image as ImageIcon
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
@@ -117,6 +120,26 @@ const THEMES = {
   dark: { id: 'dark', bg: 'bg-zinc-950', card: 'bg-zinc-900', header: 'bg-zinc-900', accent: 'text-indigo-400', border: 'border-zinc-800', text: 'text-zinc-100', muted: 'text-zinc-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' }
 };
 
+// Avatar Helper Component
+const Avatar = ({ src, name, size = "md", className = "" }) => {
+    const sizeClasses = {
+        sm: "w-6 h-6 text-[8px]",
+        md: "w-10 h-10 text-[12px]",
+        lg: "w-16 h-16 text-xl",
+        xl: "w-32 h-32 text-4xl"
+    };
+    
+    if (src && src.startsWith('http')) {
+        return <img src={src} alt={name} className={`${sizeClasses[size]} rounded-2xl object-cover border border-white/10 shadow-md ${className}`} onError={(e) => { e.target.src = ''; e.target.onerror = null; }} />;
+    }
+    
+    return (
+        <div className={`${sizeClasses[size]} rounded-2xl bg-indigo-600 flex items-center justify-center text-white font-black uppercase shadow-lg border border-white/10 ${className}`}>
+            {name ? name.charAt(0) : '?'}
+        </div>
+    );
+};
+
 const App = () => {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -153,7 +176,9 @@ const App = () => {
 
   const [profile, setProfile] = useState({ 
     displayName: 'Operator', 
+    photoURL: '',
     joinedGuilds: [], 
+    friends: [],
     theme: 'light',
     handles: { steam: '', psn: '', xbox: '', youtube: '', twitch: '', kick: '' },
     showcaseGames: ['', '', '', '', '']
@@ -192,7 +217,9 @@ const App = () => {
       if (!snap.exists()) {
         await setDoc(profileRef, {
           displayName: authForm.displayName || `Operator_${user.uid.slice(0, 4)}`,
+          photoURL: '',
           joinedGuilds: [],
+          friends: [],
           theme: 'light',
           handles: { steam: '', psn: '', xbox: '', youtube: '', twitch: '', kick: '' },
           showcaseGames: ['', '', '', '', ''],
@@ -255,6 +282,7 @@ const App = () => {
     }
   };
 
+  // --- IDENTITY & DATA PERSISTENCE ---
   const saveProfile = async (data) => {
     if (!user || !db) return;
     setProfileSaving(true);
@@ -267,38 +295,57 @@ const App = () => {
       const dirRef = doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid);
       batch.set(dirRef, {
           displayName: data.displayName,
+          photoURL: data.photoURL || '',
           handles: data.handles || {},
           showcaseGames: data.showcaseGames || [],
           theme: data.theme || 'light',
           uid: user.uid
       }, { merge: true });
 
+      // Propagation logic for Guilds
       guilds.forEach(guild => {
         const memberIdx = guild.members?.findIndex(m => (m.uid || m) === user.uid);
         if (memberIdx !== -1) {
           const updatedMembers = [...guild.members];
-          updatedMembers[memberIdx] = { uid: user.uid, name: data.displayName };
+          updatedMembers[memberIdx] = { uid: user.uid, name: data.displayName, photoURL: data.photoURL || '' };
           batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: updatedMembers });
         }
       });
 
+      // Propagation logic for Sessions
       sessions.forEach(session => {
         let needsUpdate = false;
         const updateData = {};
-        if (session.userId === user.uid) { updateData.userName = data.displayName; needsUpdate = true; }
+        if (session.userId === user.uid) { 
+            updateData.userName = data.displayName; 
+            updateData.userPhotoURL = data.photoURL || '';
+            needsUpdate = true; 
+        }
         const partIdx = session.participants?.findIndex(p => p.uid === user.uid);
         if (partIdx !== -1) {
           const updatedParticipants = [...session.participants];
-          updatedParticipants[partIdx] = { uid: user.uid, name: data.displayName };
+          updatedParticipants[partIdx] = { uid: user.uid, name: data.displayName, photoURL: data.photoURL || '' };
           updateData.participants = updatedParticipants;
           needsUpdate = true;
         }
         if (needsUpdate) batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), updateData);
       });
+
       await batch.commit();
     } finally {
       setTimeout(() => setProfileSaving(false), 800);
     }
+  };
+
+  // --- FRIENDS SYSTEM ---
+  const toggleFriend = async (targetUser) => {
+    if (!user || !db) return;
+    const isFriend = profile.friends?.some(f => f.uid === targetUser.uid);
+    const updatedFriends = isFriend 
+        ? profile.friends.filter(f => f.uid !== targetUser.uid)
+        : [...(profile.friends || []), { uid: targetUser.uid, name: targetUser.displayName, photoURL: targetUser.photoURL || '' }];
+    
+    await saveProfile({ ...profile, friends: updatedFriends });
   };
 
   const handleTerminateAccount = async () => {
@@ -358,7 +405,7 @@ const App = () => {
     } else {
       if (guild.isPrivate) return;
       await saveProfile({ ...profile, joinedGuilds: [...joinedList, guild.id] });
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName }) });
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }) });
     }
   };
 
@@ -371,7 +418,7 @@ const App = () => {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
     } else {
       if (participants.length >= (Number(session.maxOpenings) || 0) + 1) return;
-      const updated = [...participants, { uid: user.uid, name: profile.displayName }];
+      const updated = [...participants, { uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }];
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', session.id), { participants: updated });
     }
   };
@@ -415,7 +462,7 @@ const App = () => {
     const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const gRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'guilds'), { 
       name: newGuild.name, desc: newGuild.desc || "Active Sector", ownerId: user.uid, 
-      members: [{ uid: user.uid, name: profile.displayName }], isPrivate: newGuild.isPrivate, inviteCode, createdAt: serverTimestamp() 
+      members: [{ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }], isPrivate: newGuild.isPrivate, inviteCode, createdAt: serverTimestamp() 
     });
     await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), gRef.id] });
     setNewGuild({ name: '', desc: '', isPrivate: false });
@@ -430,7 +477,7 @@ const App = () => {
     const guildToJoin = guilds.find(g => g.inviteCode === targetCode);
     if (!guildToJoin) { setInviteError("INVALID CODE"); return; }
     await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), guildToJoin.id] });
-    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName }) });
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guildToJoin.id), { members: arrayUnion({ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }) });
     setInviteInput('');
     setActiveGuildId(guildToJoin.id);
   };
@@ -442,7 +489,8 @@ const App = () => {
     if (gId === 'all') return;
     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'), { 
       ...formData, maxOpenings: Number(formData.maxOpenings), guildId: gId, 
-      userId: user.uid, userName: profile.displayName, participants: [{ uid: user.uid, name: profile.displayName }], createdAt: serverTimestamp() 
+      userId: user.uid, userName: profile.displayName, userPhotoURL: profile.photoURL || '', 
+      participants: [{ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }], createdAt: serverTimestamp() 
     });
     setIsModalOpen(false);
   };
@@ -546,7 +594,14 @@ const App = () => {
                           <div className="flex flex-wrap gap-4 mb-6 opacity-40"><div className="flex items-center gap-2"><Clock className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{String(session.startTime)}</span></div><div className="flex items-center gap-2"><Timer className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{session.duration} HR</span></div></div>
                           <div className="mb-8 flex-1">
                             <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-4">{session.participants?.length || 0} / {(Number(session.maxOpenings) || 0) + 1} Enlisted</p>
-                            <div className="flex flex-wrap gap-2">{session.participants?.map((p, i) => (<button key={i} onClick={() => openPublicProfile(p.uid)} className={`flex items-center gap-2 text-[9px] font-black px-4 py-2 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase shadow-sm hover:border-indigo-500 transition`}><div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>{String(p.name)}</button>))}</div>
+                            <div className="flex flex-wrap gap-2">
+                                {session.participants?.map((p, i) => (
+                                    <button key={i} onClick={() => openPublicProfile(p.uid)} className={`flex items-center gap-2 text-[9px] font-black px-3 py-1.5 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase shadow-sm hover:border-indigo-500 transition`}>
+                                        <Avatar src={p.photoURL} name={p.name} size="sm" />
+                                        {String(p.name)}
+                                    </button>
+                                ))}
+                            </div>
                           </div>
                           <div className="flex gap-3 mt-auto">
                             <button onClick={() => toggleJoinSession(session)} className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition ${session.participants?.some(p => p.uid === user.uid) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>{session.participants?.some(p => p.uid === user.uid) ? 'Retire' : 'Enlist'}</button>
@@ -560,27 +615,40 @@ const App = () => {
               </div>
             </>
           ) : (
-            <div className="max-w-4xl mx-auto pb-20">
+            <div className="max-w-6xl mx-auto pb-20 space-y-8">
               <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[5rem] p-12 shadow-2xl relative overflow-hidden`}>
                 <div className="absolute top-0 left-0 w-full h-1 bg-indigo-600"></div>
                 <div className="flex flex-col md:flex-row gap-12">
                     <div className="w-full md:w-1/3 text-center">
-                        <div className="w-32 h-32 mx-auto mb-8 rounded-[3rem] bg-indigo-600 flex items-center justify-center text-white text-5xl font-black shadow-2xl">{profile.displayName.charAt(0)}</div>
-                        <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} className="w-full bg-transparent text-center text-3xl font-black italic uppercase outline-none focus:text-indigo-600 transition" />
-                        <div className="mt-8 flex gap-3">
-                            <button onClick={() => setProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
-                            <button onClick={() => setProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
+                        <div className="relative group mx-auto w-fit">
+                            <Avatar src={profile.photoURL} name={profile.displayName} size="xl" className="mx-auto mb-8" />
+                            <div className="absolute inset-0 bg-black/40 rounded-[3rem] flex items-center justify-center opacity-0 group-hover:opacity-100 transition cursor-pointer">
+                                <ImageIcon className="text-white w-8 h-8" />
+                            </div>
                         </div>
-                        <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-10 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
+                        <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} className="w-full bg-transparent text-center text-3xl font-black italic uppercase outline-none focus:text-indigo-600 transition" />
+                        
+                        <div className="mt-8 flex gap-3">
+                            <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
+                        </div>
+                        
+                        <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-6 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
                             {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} SYNC PROFILE
                         </button>
+                        
                         <div className="mt-12">
                             <button onClick={() => setShowDeleteConfirm(true)} className="text-[10px] font-black uppercase text-rose-500 opacity-40 hover:opacity-100 transition tracking-widest underline decoration-dotted underline-offset-4">Terminate Identity</button>
                         </div>
                     </div>
+                    
                     <div className="flex-1 space-y-10">
                         <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Lock className="w-3 h-3 inline mr-2" /> Identity Handles</p>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><UserIcon className="w-3 h-3 inline mr-2" /> Visual Identity</p>
+                            <input placeholder="AVATAR IMAGE URL (PNG/JPG)" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.photoURL} onChange={e => setProfile({...profile, photoURL: e.target.value})} />
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Lock className="w-3 h-3 inline mr-2" /> Identity Matrix</p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                 <input placeholder="STEAM" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.steam} onChange={e => setProfile({...profile, handles: {...profile.handles, steam: e.target.value}})} />
                                 <input placeholder="PSN" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} />
@@ -588,19 +656,31 @@ const App = () => {
                             </div>
                         </div>
                         <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Video className="w-3 h-3 inline mr-2" /> Broadcast Hub</p>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <input placeholder="TWITCH" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.twitch} onChange={e => setProfile({...profile, handles: {...profile.handles, twitch: e.target.value}})} />
-                                <input placeholder="YOUTUBE" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.youtube} onChange={e => setProfile({...profile, handles: {...profile.handles, youtube: e.target.value}})} />
-                                <input placeholder="KICK" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.handles?.kick} onChange={e => setProfile({...profile, handles: {...profile.handles, kick: e.target.value}})} />
-                            </div>
-                        </div>
-                        <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Target className="w-3 h-3 inline mr-2" /> Interest Showcase</p>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Target className="w-3 h-3 inline mr-2" /> Showcase</p>
                             <div className="space-y-3">{[0,1,2,3,4].map(idx => (<input key={idx} placeholder={`GAME 0${idx+1}`} className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.showcaseGames?.[idx] || ''} onChange={e => { const newGames = [...(profile.showcaseGames || ['', '', '', '', ''])]; newGames[idx] = e.target.value; setProfile({...profile, showcaseGames: newGames}); }} />))}</div>
                         </div>
                     </div>
                 </div>
+              </div>
+
+              {/* FRIENDS LIST SECTION */}
+              <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 shadow-xl`}>
+                <p className="text-[11px] font-black uppercase opacity-30 mb-8 tracking-widest flex items-center gap-2"><Users className="w-4 h-4" /> Enlisted Allies ({profile.friends?.length || 0})</p>
+                {profile.friends?.length > 0 ? (
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                        {profile.friends.map(friend => (
+                            <button key={friend.uid} onClick={() => openPublicProfile(friend.uid)} className={`${activeTheme.bg} border ${activeTheme.border} p-6 rounded-[2.5rem] flex flex-col items-center gap-3 hover:border-indigo-500 transition group`}>
+                                <Avatar src={friend.photoURL} name={friend.name} size="md" className="group-hover:scale-110 transition" />
+                                <p className="text-[10px] font-black uppercase truncate w-full text-center">{friend.name}</p>
+                            </button>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="py-12 text-center border-2 border-dashed border-slate-500/10 rounded-[3rem] opacity-20">
+                        <UserPlus className="mx-auto mb-4 w-10 h-10" />
+                        <p className="text-[10px] font-black uppercase tracking-widest italic">No allies enlisted. Connect from operator profiles.</p>
+                    </div>
+                )}
               </div>
             </div>
           )}
@@ -618,12 +698,11 @@ const App = () => {
                     <button onClick={handleTerminateAccount} disabled={deleteLoading} className="w-full py-6 rounded-3xl bg-rose-600 text-white font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition">Confirm Termination</button>
                     <button onClick={() => setShowDeleteConfirm(false)} className="w-full py-6 rounded-3xl bg-white/5 border border-white/10 text-white font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition">Cancel</button>
                 </div>
-                {authError && <div className="mt-8 p-6 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-[9px] font-black uppercase text-rose-500">{authError}</div>}
             </div>
         </div>
       )}
 
-      {/* MODALS */}
+      {/* FEEDBACK MODAL */}
       {isFeedbackModalOpen && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
@@ -645,28 +724,71 @@ const App = () => {
         </div>
       )}
 
+      {/* PUBLIC INTEL DECK (Profile Viewer) */}
       {viewingProfile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
-          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative`}>
+          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
             <button onClick={() => setViewingProfile(null)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
-            <div className="text-center mb-10"><div className="w-24 h-24 mx-auto mb-6 rounded-3xl bg-indigo-600 flex items-center justify-center text-white text-4xl font-black shadow-xl">{viewingProfile.displayName.charAt(0)}</div><h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3></div>
-            <div className="grid grid-cols-3 gap-4 mb-10">{Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (<div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>))}</div>
-            <div className="space-y-2"><p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>{viewingProfile.showcaseGames?.map((game, idx) => game && (<div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4"><span className="text-[9px] font-black opacity-20">0{idx+1}</span><span className="text-xs font-black uppercase tracking-tight italic">{game}</span></div>))}</div>
-            <button onClick={() => setViewingProfile(null)} className="w-full mt-10 py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Intel</button>
+            <div className="text-center mb-8">
+                <Avatar src={viewingProfile.photoURL} name={viewingProfile.displayName} size="xl" className="mx-auto mb-6" />
+                <h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3>
+            </div>
+
+            {/* FRIEND TOGGLE ACTION */}
+            {viewingProfile.uid !== user?.uid && (
+                <div className="flex justify-center mb-10">
+                    <button 
+                        onClick={() => toggleFriend(viewingProfile)}
+                        className={`px-10 py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest transition flex items-center gap-2 ${profile.friends?.some(f => f.uid === viewingProfile.uid) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : 'bg-indigo-600 text-white'}`}
+                    >
+                        {profile.friends?.some(f => f.uid === viewingProfile.uid) ? <UserMinus className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
+                        {profile.friends?.some(f => f.uid === viewingProfile.uid) ? 'Remove Ally' : 'Enlist Ally'}
+                    </button>
+                </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-4 mb-10">
+                {Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (<div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>))}
+            </div>
+            <div className="space-y-2">
+                <p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>
+                {viewingProfile.showcaseGames?.map((game, idx) => game && (<div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4"><span className="text-[9px] font-black opacity-20">0{idx+1}</span><span className="text-xs font-black uppercase tracking-tight italic">{game}</span></div>))}
+            </div>
           </div>
         </div>
       )}
 
+      {/* ROSTER MODAL */}
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
-            <div className="flex justify-between items-start mb-6"><div><h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>{rosterGuild.isPrivate && (<div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl"><div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div><button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button></div>)}</div><button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button></div>
-            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{rosterGuild.members?.map((m, idx) => (<button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}><div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white shadow-lg group-hover:scale-110 transition">{String(m.name || 'O').charAt(0)}</div><div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>{(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}</button>))}</div>
+            <div className="flex justify-between items-start mb-6">
+                <div>
+                    <h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>
+                    {rosterGuild.isPrivate && (
+                        <div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl">
+                            <div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div>
+                            <button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button>
+                        </div>
+                    )}
+                </div>
+                <button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button>
+            </div>
+            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
+                {rosterGuild.members?.map((m, idx) => (
+                    <button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}>
+                        <Avatar src={m.photoURL} name={m.name} size="md" className="group-hover:scale-110 transition" />
+                        <div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>
+                        {(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}
+                    </button>
+                ))}
+            </div>
             <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Roster</button>
           </div>
         </div>
       )}
 
+      {/* GUILD DIRECTORY MODAL */}
       {isGuildModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
