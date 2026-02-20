@@ -73,12 +73,12 @@ import {
   Bell,
   Check,
   UserX,
-  Image as ImageIcon,
+  ImageIcon,
   Sparkles
 } from 'lucide-react';
 
 // --- CONFIGURATION & THEMES ---
-// Moving this to the absolute top to ensure no ReferenceErrors occur during component mounting
+// DEFINED AT TOP TO PREVENT ReferenceError
 const THEMES = {
   light: { 
     id: 'light', 
@@ -104,14 +104,14 @@ const THEMES = {
   },
   neon: { 
     id: 'neon', 
-    bg: 'bg-[#050505]', 
-    card: 'bg-[#121212]', 
-    header: 'bg-[#000000]', 
-    accent: 'text-cyan-400', 
-    border: 'border-fuchsia-500/20', 
-    text: 'text-white', 
-    muted: 'text-fuchsia-300/50', 
-    button: 'bg-fuchsia-600 hover:bg-fuchsia-500 text-white shadow-[0_0_15px_rgba(192,38,211,0.4)]' 
+    bg: 'bg-[#eaff00]', // NEON YELLOW
+    card: 'bg-white/90', 
+    header: 'bg-[#eaff00]', 
+    accent: 'text-cyan-600', 
+    border: 'border-black/10', 
+    text: 'text-black', 
+    muted: 'text-black/50', 
+    button: 'bg-[#00ffff] hover:bg-[#33ffff] text-black shadow-[0_0_20px_rgba(0,255,255,0.6)] border border-black/10' // NEON CYAN
   }
 };
 
@@ -480,6 +480,65 @@ const App = () => {
     }
   };
 
+  const handleSubmitSession = async (e) => {
+    e.preventDefault();
+    if (!db || !user) return;
+    const gId = formData.guildId || activeGuildId;
+    if (gId === 'all' || !gId) return;
+    
+    const sessRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'), { 
+      ...formData, maxOpenings: Number(formData.maxOpenings), guildId: gId, 
+      userId: user.uid, userName: profile.displayName, userPhotoURL: profile.photoURL || '', 
+      participants: [{ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }], createdAt: serverTimestamp() 
+    });
+
+    const targetGuild = guilds.find(g => g.id === gId);
+    if (targetGuild && profile.friends?.length > 0) {
+        const batch = writeBatch(db);
+        const friendsInGuild = profile.friends.filter(f => 
+            targetGuild.members.some(m => (m.uid || m) === f.uid)
+        );
+
+        friendsInGuild.forEach(friend => {
+            const notifRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'notifications'));
+            batch.set(notifRef, {
+                type: 'session_alert',
+                targetUid: friend.uid,
+                senderName: profile.displayName,
+                senderPhotoURL: profile.photoURL || '',
+                gameTitle: formData.gameTitle,
+                guildName: targetGuild.name,
+                sessionId: sessRef.id,
+                timestamp: serverTimestamp()
+            });
+        });
+        await batch.commit();
+    }
+    setIsModalOpen(false);
+  };
+
+  const openPublicProfile = async (targetUid) => {
+    if (!db) return;
+    setProfileLoading(true);
+    try {
+        const snap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', targetUid));
+        if (snap.exists()) setViewingProfile(snap.data());
+    } finally {
+        setProfileLoading(false);
+    }
+  };
+
+  const filteredSessionsByDate = useMemo(() => {
+    const joined = profile.joinedGuilds || [];
+    const filtered = sessions.filter(s => {
+      const inGuild = activeGuildId === 'all' ? joined.includes(s.guildId) : s.guildId === activeGuildId;
+      return inGuild && String(s.gameTitle).toLowerCase().includes(searchTerm.toLowerCase());
+    }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const groups = {};
+    filtered.forEach(s => { const d = String(s.date); if (!groups[d]) groups[d] = []; groups[d].push(s); });
+    return groups;
+  }, [sessions, activeGuildId, profile.joinedGuilds, searchTerm]);
+
   const handleSendFeedback = async (e) => {
     e.preventDefault();
     if (!db || !user) return;
@@ -525,54 +584,6 @@ const App = () => {
     setInviteInput('');
     setActiveGuildId(guildToJoin.id);
   };
-
-  const handleSubmitSession = async (e) => {
-    e.preventDefault();
-    if (!db || !user) return;
-    const gId = formData.guildId || activeGuildId;
-    if (gId === 'all' || !gId) return;
-    
-    const sessRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'), { 
-      ...formData, maxOpenings: Number(formData.maxOpenings), guildId: gId, 
-      userId: user.uid, userName: profile.displayName, userPhotoURL: profile.photoURL || '', 
-      participants: [{ uid: user.uid, name: profile.displayName, photoURL: profile.photoURL || '' }], createdAt: serverTimestamp() 
-    });
-
-    const targetGuild = guilds.find(g => g.id === gId);
-    if (targetGuild && profile.friends?.length > 0) {
-        const batch = writeBatch(db);
-        const friendsInGuild = profile.friends.filter(f => 
-            targetGuild.members.some(m => (m.uid || m) === f.uid)
-        );
-
-        friendsInGuild.forEach(friend => {
-            const notifRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'notifications'));
-            batch.set(notifRef, {
-                type: 'session_alert',
-                targetUid: friend.uid,
-                senderName: profile.displayName,
-                senderPhotoURL: profile.photoURL || '',
-                gameTitle: formData.gameTitle,
-                guildName: targetGuild.name,
-                sessionId: sessRef.id,
-                timestamp: serverTimestamp()
-            });
-        });
-        await batch.commit();
-    }
-    setIsModalOpen(false);
-  };
-
-  const filteredSessionsByDate = useMemo(() => {
-    const joined = profile.joinedGuilds || [];
-    const filtered = sessions.filter(s => {
-      const inGuild = activeGuildId === 'all' ? joined.includes(s.guildId) : s.guildId === activeGuildId;
-      return inGuild && String(s.gameTitle).toLowerCase().includes(searchTerm.toLowerCase());
-    }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    const groups = {};
-    filtered.forEach(s => { const d = String(s.date); if (!groups[d]) groups[d] = []; groups[d].push(s); });
-    return groups;
-  }, [sessions, activeGuildId, profile.joinedGuilds, searchTerm]);
 
   if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2></div>;
   if (authLoading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Gamepad2 className="w-12 h-12 text-indigo-500 animate-bounce" /></div>;
@@ -644,7 +655,7 @@ const App = () => {
                   ) : notifications.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)).map(n => (
                       <div key={n.id} className={`${activeTheme.bg} p-4 rounded-2xl border ${activeTheme.border}`}>
                           <div className="flex items-center gap-3 mb-3">
-                              <Avatar src={n.senderPhotoURL} name={n.senderName} size="sm" />
+                              <Avatar src={n.senderPhotoURL} name={String(n.senderName)} size="sm" />
                               <div className="flex-1 min-w-0">
                                   {n.type === 'friend_request' ? (
                                       <p className="text-[10px] font-black uppercase leading-tight">{String(n.senderName)} <span className="opacity-40 font-bold">requested enlistment</span></p>
@@ -711,7 +722,7 @@ const App = () => {
                             <div className="flex flex-wrap gap-2">
                                 {session.participants?.map((p, i) => (
                                     <button key={i} onClick={() => openPublicProfile(p.uid)} className={`flex items-center gap-2 text-[9px] font-black px-3 py-1.5 rounded-full ${activeTheme.bg} border ${activeTheme.border} uppercase shadow-sm hover:border-indigo-500 transition`}>
-                                        <Avatar src={p.photoURL} name={p.name} size="sm" />
+                                        <Avatar src={p.photoURL} name={String(p.name)} size="sm" />
                                         {String(p.name)}
                                     </button>
                                 ))}
@@ -735,17 +746,17 @@ const App = () => {
                 <div className="flex flex-col md:flex-row gap-12">
                     <div className="w-full md:w-1/3 text-center">
                         <div className="relative group mx-auto w-fit">
-                            <Avatar src={profile.photoURL} name={profile.displayName} size="xl" className="mx-auto mb-8" />
+                            <Avatar src={profile.photoURL} name={String(profile.displayName)} size="xl" className="mx-auto mb-8" />
                         </div>
                         <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} className="w-full bg-transparent text-center text-3xl font-black italic uppercase outline-none focus:text-indigo-600 transition" />
                         
                         <div className="mt-8 flex gap-3">
-                            <button onClick={() => setProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
-                            <button onClick={() => setProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
-                            <button onClick={() => setProfile({...profile, theme: 'neon'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'neon' ? 'border-fuchsia-600 bg-fuchsia-900/20' : 'border-transparent opacity-40'}`}><Sparkles className="w-4 h-4 mx-auto text-fuchsia-500" /></button>
+                            <button onClick={() => setProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`} title="Standard"><Palette className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => setProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`} title="Midnight"><Zap className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => setProfile({...profile, theme: 'neon'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'neon' ? 'border-fuchsia-600 bg-fuchsia-950/20' : 'border-transparent opacity-40'}`} title="Neon Hyper Pop"><Sparkles className="w-4 h-4 mx-auto text-fuchsia-500" /></button>
                         </div>
                         
-                        <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-6 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
+                        <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-10 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
                             {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} SYNC PROFILE
                         </button>
                         <div className="mt-12">
@@ -768,12 +779,14 @@ const App = () => {
               <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 shadow-xl`}>
                 <p className="text-[11px] font-black uppercase opacity-30 mb-8 tracking-widest flex items-center gap-2"><Users className="w-4 h-4" /> Enlisted Allies ({profile.friends?.length || 0})</p>
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                    {profile.friends?.map(friend => (
+                    {profile.friends?.length > 0 ? profile.friends.map(friend => (
                         <button key={friend.uid} onClick={() => openPublicProfile(friend.uid)} className={`${activeTheme.bg} border ${activeTheme.border} p-6 rounded-[2.5rem] flex flex-col items-center gap-3 hover:border-indigo-500 transition group`}>
-                            <Avatar src={friend.photoURL} name={friend.name} size="md" className="group-hover:scale-110 transition" />
-                            <p className="text-[10px] font-black uppercase truncate w-full text-center">{friend.name}</p>
+                            <Avatar src={friend.photoURL} name={String(friend.name)} size="md" className="group-hover:scale-110 transition" />
+                            <p className="text-[10px] font-black uppercase truncate w-full text-center">{String(friend.name)}</p>
                         </button>
-                    ))}
+                    )) : (
+                        <div className="col-span-full py-12 text-center opacity-20 italic text-[10px] font-black uppercase tracking-widest">No Allies Enlisted</div>
+                    )}
                 </div>
               </div>
             </div>
@@ -786,7 +799,7 @@ const App = () => {
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
           <div className={`${viewingProfile.theme === 'dark' || viewingProfile.theme === 'neon' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
             <button onClick={() => setViewingProfile(null)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
-            <div className="text-center mb-8"><Avatar src={viewingProfile.photoURL} name={viewingProfile.displayName} size="xl" className="mx-auto mb-6" /><h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3></div>
+            <div className="text-center mb-8"><Avatar src={viewingProfile.photoURL} name={String(viewingProfile.displayName)} size="xl" className="mx-auto mb-6" /><h3 className="text-3xl font-black italic uppercase tracking-tight">{String(viewingProfile.displayName)}</h3></div>
             {viewingProfile.uid !== user?.uid && (
                 <div className="flex justify-center mb-10">
                     {profile.friends?.some(f => f.uid === viewingProfile.uid) ? (
@@ -796,7 +809,7 @@ const App = () => {
                     )}
                 </div>
             )}
-            <div className="grid grid-cols-3 gap-4 mb-10">{Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (<div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>))}</div>
+            <div className="grid grid-cols-3 gap-4 mb-10">{Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (<div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{String(val)}</p></div>))}</div>
           </div>
         </div>
       )}
@@ -804,8 +817,8 @@ const App = () => {
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
-            <div className="flex justify-between items-start mb-6"><div><h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>{rosterGuild.isPrivate && (<div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl"><div><p className="text-[8px] font-black uppercase tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div><button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button></div>)}</div><button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button></div>
-            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{rosterGuild.members?.map((m, idx) => (<button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}><Avatar src={m.photoURL} name={m.name} size="md" className="group-hover:scale-110 transition" /><div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>{(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}</button>))}</div>
+            <div className="flex justify-between items-start mb-6"><div><h3 className="text-4xl font-black uppercase italic tracking-tighter">{String(rosterGuild.name)}</h3>{rosterGuild.isPrivate && (<div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl"><div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{String(rosterGuild.inviteCode)}</p></div><button onClick={() => navigator.clipboard.writeText(String(rosterGuild.inviteCode))} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button></div>)}</div><button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button></div>
+            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{rosterGuild.members?.map((m, idx) => (<button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}><Avatar src={m.photoURL} name={String(m.name)} size="md" className="group-hover:scale-110 transition" /><div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>{(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}</button>))}</div>
           </div>
         </div>
       )}
@@ -814,12 +827,12 @@ const App = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-2xl w-full shadow-2xl`}>
             <div className="flex justify-between items-start mb-10"><h3 className="text-4xl font-black uppercase italic tracking-tighter">Directory</h3><button onClick={() => setIsGuildModalOpen(false)} className="w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full">✕</button></div>
-            <div className="mb-10 p-6 rounded-[2.5rem] bg-indigo-600/10 border border-indigo-500/20"><p className="text-[10px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Secure Enlistment</p><form onSubmit={joinPrivateGuild} className="flex gap-4"><input placeholder="ENTER INVITE CODE" className="flex-1 p-5 rounded-2xl bg-black/40 border border-indigo-500/30 outline-none text-xs font-black uppercase focus:border-indigo-500 transition text-white" value={inviteInput} onChange={e => setInviteInput(e.target.value.toUpperCase())} maxLength={6} /><button type="submit" className="px-8 py-5 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest shadow-xl transition">Enlist</button></form></div>
+            <div className="mb-10 p-6 rounded-[2.5rem] bg-indigo-600/10 border border-indigo-500/20"><p className="text-[10px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Secure Enlistment</p><form onSubmit={joinPrivateGuild} className="flex gap-4"><input placeholder="INVITE CODE" className="flex-1 p-5 rounded-2xl bg-black/40 border border-indigo-500/30 outline-none text-xs font-black uppercase focus:border-indigo-500 transition text-white" value={inviteInput} onChange={e => setInviteInput(e.target.value.toUpperCase())} maxLength={6} /><button type="submit" className="px-8 py-5 rounded-2xl bg-indigo-600 text-white font-black uppercase text-[10px] tracking-widest transition">Enlist</button></form></div>
             <div className="space-y-4 max-h-[30vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{guilds.map(g => (<div key={g.id} className={`${activeTheme.bg} p-6 rounded-[2.5rem] border ${activeTheme.border} flex justify-between items-center group`}><div className="flex-1"><div className="flex items-center gap-2"><p className="font-black uppercase text-sm group-hover:text-indigo-500 transition">{String(g.name)}</p>{g.isPrivate && <Lock className="w-3 h-3 opacity-30" />}</div><p className="text-[9px] font-black opacity-30 mt-1 uppercase">{g.members?.length || 0} Members</p></div><div className="flex items-center gap-2">
                 {g.isPrivate ? (<div className="px-6 py-3 rounded-2xl bg-slate-500/5 text-slate-400 text-[9px] font-black uppercase italic border border-white/5">Private</div>) : (<button onClick={() => handleToggleGuild(g)} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition active:scale-95 ${profile.joinedGuilds?.includes(g.id) ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' : activeTheme.button}`}>{profile.joinedGuilds?.includes(g.id) ? 'Retire' : 'Enlist'}</button>)}
                 {g.ownerId === user?.uid && <button onClick={() => disbandGuild(g.id)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl transition hover:bg-rose-500 hover:text-white"><Skull className="w-4 h-4" /></button>}
             </div></div>))}</div>
-            <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}><p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p><div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-fuchsia-600 bg-fuchsia-950/20 text-fuchsia-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private' : 'Public'}</span></button></div><button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button></div>
+            <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}><p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Sector</p><div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} /><button type="button" onClick={() => setNewGuild({...newGuild, isPrivate: !newGuild.isPrivate})} className={`p-5 rounded-2xl border-2 transition flex items-center justify-center gap-3 ${newGuild.isPrivate ? 'border-fuchsia-600 bg-fuchsia-950/20 text-fuchsia-400' : 'border-slate-500/20 opacity-40'}`}>{newGuild.isPrivate ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}<span className="text-[10px] font-black uppercase">{newGuild.isPrivate ? 'Private' : 'Public'}</span></button></div><button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest transition`}>Commission Registry</button></div>
           </div>
         </div>
       )}
