@@ -234,34 +234,31 @@ const App = () => {
     const unlocked = [...(data.achievements || [])];
     const h = data.handles || {};
     
-    // Check Broadcaster
-    if (h.twitch && h.youtube && h.kick && !unlocked.includes('broadcaster')) unlocked.push('broadcaster');
-    
-    // Check Platform Pro
-    if (h.steam && h.psn && h.xbox && !unlocked.includes('platform_pro')) unlocked.push('platform_pro');
+    const hasBroadcaster = h.twitch?.trim() && h.youtube?.trim() && h.kick?.trim();
+    const hasPlatformPro = h.steam?.trim() && h.psn?.trim() && h.xbox?.trim();
+    const hasCompletionist = hasBroadcaster && hasPlatformPro;
 
-    // Check Completionist
-    const allHandlesFilled = Object.values(h).every(v => v && v.trim().length > 0);
-    if (allHandlesFilled && !unlocked.includes('completionist')) unlocked.push('completionist');
+    if (hasBroadcaster && !unlocked.includes('broadcaster')) unlocked.push('broadcaster');
+    if (hasPlatformPro && !unlocked.includes('platform_pro')) unlocked.push('platform_pro');
+    if (hasCompletionist && !unlocked.includes('completionist')) unlocked.push('completionist');
 
-    // Check First Guild
     if (data.joinedGuilds?.length > 0 && !unlocked.includes('first_guild')) unlocked.push('first_guild');
 
-    // Check First Session
-    const isEnlistedAnywhere = sessions.some(s => s.participants?.some(p => p.uid === user?.uid));
-    if (isEnlistedAnywhere && !unlocked.includes('first_session')) unlocked.push('first_session');
+    const isEnlisted = sessions.some(s => s.participants?.some(p => p.uid === user?.uid));
+    if (isEnlisted && !unlocked.includes('first_session')) unlocked.push('first_session');
 
-    return unlocked;
+    return [...new Set(unlocked)]; // Remove duplicates
   };
 
-  // Auto-sync achievements when session/guild data changes
+  // Background Watcher for Immediate Pops
   useEffect(() => {
-    if (!user || !user.emailVerified || !profile.displayName) return;
+    if (!user || !user.emailVerified || profileSaving) return;
     const updated = checkAchievements(profile);
     if (JSON.stringify(updated) !== JSON.stringify(profile.achievements || [])) {
-        saveProfile({ ...profile, achievements: updated });
+        // Use direct update to avoid recursion
+        updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'), { achievements: updated });
     }
-  }, [sessions.length, guilds.length, profile.joinedGuilds?.length]);
+  }, [sessions.length, guilds.length, profile.joinedGuilds?.length, profile.handles]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -308,7 +305,6 @@ const App = () => {
     if (!user || !db) return;
     setProfileSaving(true);
     
-    // Ensure achievements are fresh
     const updatedAchievements = checkAchievements(data);
     const finalData = { ...data, achievements: updatedAchievements };
 
@@ -389,7 +385,7 @@ const App = () => {
         await batch.commit();
         await deleteUser(auth.currentUser);
     } catch (err) {
-        setAuthError("RE-AUTHENTICATION REQUIRED: Logout and log back in to verify ownership before deletion.");
+        setAuthError("RE-AUTHENTICATION REQUIRED: Please re-login before terminating account.");
     } finally {
         setDeleteLoading(false);
         setShowDeleteConfirm(false);
@@ -458,7 +454,7 @@ const App = () => {
   };
 
   const disbandGuild = async (gId) => {
-    if (!window.confirm("PERMANENT DISBAND?")) return;
+    if (!window.confirm("DISBAND?")) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', gId));
     const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'));
     snap.docs.filter(d => d.data().guildId === gId).forEach(d => deleteDoc(d.ref));
@@ -468,7 +464,7 @@ const App = () => {
     if (!newGuild.name || !user || !db) return;
     const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const gRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'guilds'), { 
-      name: newGuild.name, desc: newGuild.desc || "Active Tactical Sector", ownerId: user.uid, 
+      name: newGuild.name, desc: newGuild.desc || "Active Sector", ownerId: user.uid, 
       members: [{ uid: user.uid, name: profile.displayName }], isPrivate: newGuild.isPrivate, inviteCode, createdAt: serverTimestamp() 
     });
     await saveProfile({ ...profile, joinedGuilds: [...(profile.joinedGuilds || []), gRef.id] });
