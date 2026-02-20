@@ -69,11 +69,7 @@ import {
   Hash,
   ShieldAlert,
   AlertTriangle,
-  UserMinus,
-  Award,
-  Trophy,
-  Medal,
-  Star
+  UserMinus
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
@@ -116,20 +112,6 @@ if (isConfigValid) {
   }
 }
 
-// --- ACHIEVEMENT DEFINITIONS ---
-const ACHIEVEMENTS = [
-  { id: 'first_guild', title: 'Guild Enlistee', desc: 'Join your first tactical sector.', icon: Shield },
-  { id: 'first_session', title: 'Mission Ready', desc: 'Enlist in your first play session.', icon: Target },
-  { id: 'broadcaster', title: 'Broadcaster', desc: 'Link Twitch, YouTube, and Kick.', icon: Video },
-  { id: 'platform_pro', title: 'Multi-Platform', desc: 'Link Steam, PSN, and Xbox.', icon: LayoutGrid },
-  { id: 'completionist', title: 'Complete Operator', desc: 'Sync all identity and social handles.', icon: Award }
-];
-
-const THEMES = {
-  light: { id: 'light', bg: 'bg-slate-50', card: 'bg-white', header: 'bg-white', accent: 'text-indigo-600', border: 'border-slate-100', text: 'text-slate-900', muted: 'text-slate-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' },
-  dark: { id: 'dark', bg: 'bg-zinc-950', card: 'bg-zinc-900', header: 'bg-zinc-900', accent: 'text-indigo-400', border: 'border-zinc-800', text: 'text-zinc-100', muted: 'text-zinc-500', button: 'bg-indigo-600 hover:bg-indigo-700 text-white' }
-};
-
 const App = () => {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -169,8 +151,7 @@ const App = () => {
     joinedGuilds: [], 
     theme: 'light',
     handles: { steam: '', psn: '', xbox: '', youtube: '', twitch: '', kick: '' },
-    showcaseGames: ['', '', '', '', ''],
-    achievements: []
+    showcaseGames: ['', '', '', '', '']
   });
   const activeTheme = THEMES[profile.theme] || THEMES.light;
 
@@ -210,7 +191,6 @@ const App = () => {
           theme: 'light',
           handles: { steam: '', psn: '', xbox: '', youtube: '', twitch: '', kick: '' },
           showcaseGames: ['', '', '', '', ''],
-          achievements: [],
           createdAt: serverTimestamp()
         });
       }
@@ -228,37 +208,6 @@ const App = () => {
     });
     return () => { unsubSessions(); unsubGuilds(); unsubProfile(); };
   }, [user, user?.emailVerified]);
-
-  // --- ACHIEVEMENT ENGINE ---
-  const checkAchievements = (data) => {
-    const unlocked = [...(data.achievements || [])];
-    const h = data.handles || {};
-    
-    const hasBroadcaster = h.twitch?.trim() && h.youtube?.trim() && h.kick?.trim();
-    const hasPlatformPro = h.steam?.trim() && h.psn?.trim() && h.xbox?.trim();
-    const hasCompletionist = hasBroadcaster && hasPlatformPro;
-
-    if (hasBroadcaster && !unlocked.includes('broadcaster')) unlocked.push('broadcaster');
-    if (hasPlatformPro && !unlocked.includes('platform_pro')) unlocked.push('platform_pro');
-    if (hasCompletionist && !unlocked.includes('completionist')) unlocked.push('completionist');
-
-    if (data.joinedGuilds?.length > 0 && !unlocked.includes('first_guild')) unlocked.push('first_guild');
-
-    const isEnlisted = sessions.some(s => s.participants?.some(p => p.uid === user?.uid));
-    if (isEnlisted && !unlocked.includes('first_session')) unlocked.push('first_session');
-
-    return [...new Set(unlocked)]; // Remove duplicates
-  };
-
-  // Background Watcher for Immediate Pops
-  useEffect(() => {
-    if (!user || !user.emailVerified || profileSaving) return;
-    const updated = checkAchievements(profile);
-    if (JSON.stringify(updated) !== JSON.stringify(profile.achievements || [])) {
-        // Use direct update to avoid recursion
-        updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'), { achievements: updated });
-    }
-  }, [sessions.length, guilds.length, profile.joinedGuilds?.length, profile.handles]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -305,21 +254,17 @@ const App = () => {
     if (!user || !db) return;
     setProfileSaving(true);
     
-    const updatedAchievements = checkAchievements(data);
-    const finalData = { ...data, achievements: updatedAchievements };
-
     try {
       const batch = writeBatch(db);
       const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
-      batch.set(profileRef, finalData, { merge: true });
+      batch.set(profileRef, data, { merge: true });
       
       const dirRef = doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid);
       batch.set(dirRef, {
-          displayName: finalData.displayName,
-          handles: finalData.handles || {},
-          showcaseGames: finalData.showcaseGames || [],
-          achievements: finalData.achievements || [],
-          theme: finalData.theme || 'light',
+          displayName: data.displayName,
+          handles: data.handles || {},
+          showcaseGames: data.showcaseGames || [],
+          theme: data.theme || 'light',
           uid: user.uid
       }, { merge: true });
 
@@ -327,7 +272,7 @@ const App = () => {
         const memberIdx = guild.members?.findIndex(m => (m.uid || m) === user.uid);
         if (memberIdx !== -1) {
           const updatedMembers = [...guild.members];
-          updatedMembers[memberIdx] = { uid: user.uid, name: finalData.displayName };
+          updatedMembers[memberIdx] = { uid: user.uid, name: data.displayName };
           batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'guilds', guild.id), { members: updatedMembers });
         }
       });
@@ -335,11 +280,11 @@ const App = () => {
       sessions.forEach(session => {
         let needsUpdate = false;
         const updateData = {};
-        if (session.userId === user.uid) { updateData.userName = finalData.displayName; needsUpdate = true; }
+        if (session.userId === user.uid) { updateData.userName = data.displayName; needsUpdate = true; }
         const partIdx = session.participants?.findIndex(p => p.uid === user.uid);
         if (partIdx !== -1) {
           const updatedParticipants = [...session.participants];
-          updatedParticipants[partIdx] = { uid: user.uid, name: finalData.displayName };
+          updatedParticipants[partIdx] = { uid: user.uid, name: data.displayName };
           updateData.participants = updatedParticipants;
           needsUpdate = true;
         }
@@ -610,46 +555,27 @@ const App = () => {
               </div>
             </>
           ) : (
-            <div className="max-w-5xl mx-auto pb-20">
+            <div className="max-w-4xl mx-auto pb-20">
               <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[5rem] p-12 shadow-2xl relative overflow-hidden`}>
                 <div className="absolute top-0 left-0 w-full h-1 bg-indigo-600"></div>
                 <div className="flex flex-col md:flex-row gap-12">
                     <div className="w-full md:w-1/3 text-center">
                         <div className="w-32 h-32 mx-auto mb-8 rounded-[3rem] bg-indigo-600 flex items-center justify-center text-white text-5xl font-black shadow-2xl">{profile.displayName.charAt(0)}</div>
                         <input type="text" value={profile.displayName} onChange={e => setProfile({...profile, displayName: e.target.value})} className="w-full bg-transparent text-center text-3xl font-black italic uppercase outline-none focus:text-indigo-600 transition" />
-                        
                         <div className="mt-8 flex gap-3">
-                            <button onClick={() => setProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
-                            <button onClick={() => setProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => saveProfile({...profile, theme: 'light'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'light' ? 'border-indigo-600' : 'border-transparent opacity-40'}`}><Palette className="w-4 h-4 mx-auto" /></button>
+                            <button onClick={() => saveProfile({...profile, theme: 'dark'})} className={`flex-1 p-4 rounded-2xl border-2 transition ${profile.theme === 'dark' ? 'border-indigo-400' : 'border-transparent opacity-40'}`}><Zap className="w-4 h-4 mx-auto" /></button>
                         </div>
-                        
-                        <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-6 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
-                            {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} {profileSaving ? "SYNCING..." : "SYNC PROFILE"}
+                        <button onClick={() => saveProfile(profile)} disabled={profileSaving} className={`w-full mt-10 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
+                            {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} SYNC PROFILE
                         </button>
-
-                        <div className="mt-12 pt-8 border-t border-slate-500/10">
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest">Achievement Vault</p>
-                            <div className="grid grid-cols-5 gap-2">
-                                {ACHIEVEMENTS.map(ach => {
-                                    const isUnlocked = profile.achievements?.includes(ach.id);
-                                    const Icon = ach.icon;
-                                    return (
-                                        <div key={ach.id} title={ach.title + ": " + ach.desc} className={`p-3 rounded-xl border transition flex flex-col items-center justify-center ${isUnlocked ? 'bg-indigo-600/10 border-indigo-500/30 text-indigo-400' : 'bg-slate-500/5 border-transparent opacity-10'}`}>
-                                            <Icon className="w-5 h-5" />
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-
                         <div className="mt-12">
                             <button onClick={() => setShowDeleteConfirm(true)} className="text-[10px] font-black uppercase text-rose-500 opacity-40 hover:opacity-100 transition tracking-widest underline decoration-dotted underline-offset-4">Terminate Identity</button>
                         </div>
                     </div>
-
                     <div className="flex-1 space-y-10">
                         <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Identity Matrix</p>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Lock className="w-3 h-3 inline mr-2" /> Identity Matrix</p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                 <input placeholder="STEAM" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.steam} onChange={e => setProfile({...profile, handles: {...profile.handles, steam: e.target.value}})} />
                                 <input placeholder="PSN" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} />
@@ -657,24 +583,8 @@ const App = () => {
                             </div>
                         </div>
                         <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Video className="w-3 h-3" /> Broadcast Hub</p>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <input placeholder="TWITCH" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.twitch} onChange={e => setProfile({...profile, handles: {...profile.handles, twitch: e.target.value}})} />
-                                <input placeholder="YOUTUBE" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.youtube} onChange={e => setProfile({...profile, handles: {...profile.handles, youtube: e.target.value}})} />
-                                <input placeholder="KICK" className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.kick} onChange={e => setProfile({...profile, handles: {...profile.handles, kick: e.target.value}})} />
-                            </div>
-                        </div>
-                        <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Target className="w-3 h-3" /> Interest Showcase</p>
-                            <div className="space-y-3">
-                                {[0,1,2,3,4].map(idx => (
-                                    <input key={idx} placeholder={`GAME 0${idx+1}`} className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.showcaseGames?.[idx] || ''} onChange={e => {
-                                        const newGames = [...(profile.showcaseGames || ['', '', '', '', ''])];
-                                        newGames[idx] = e.target.value;
-                                        setProfile({...profile, showcaseGames: newGames});
-                                    }} />
-                                ))}
-                            </div>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest"><Target className="w-3 h-3 inline mr-2" /> Showcase</p>
+                            <div className="space-y-3">{[0,1,2,3,4].map(idx => (<input key={idx} placeholder={`GAME 0${idx+1}`} className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.showcaseGames?.[idx] || ''} onChange={e => { const newGames = [...(profile.showcaseGames || ['', '', '', '', ''])]; newGames[idx] = e.target.value; setProfile({...profile, showcaseGames: newGames}); }} />))}</div>
                         </div>
                     </div>
                 </div>
@@ -700,55 +610,15 @@ const App = () => {
         </div>
       )}
 
-      {/* FEEDBACK MODAL */}
-      {isFeedbackModalOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
-          <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
-            {!feedbackSent ? (
-                <>
-                    <button onClick={() => setIsFeedbackModalOpen(false)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
-                    <div className="text-center mb-10"><MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" /><h3 className="text-4xl font-black italic uppercase tracking-tighter">Submit Intelligence</h3></div>
-                    <form onSubmit={handleSendFeedback} className="space-y-6">
-                        <textarea required placeholder="DESCRIBE ISSUE..." className={`w-full h-40 p-6 rounded-[2rem] ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase text-xs focus:border-indigo-500 transition shadow-inner resize-none`} value={feedbackMsg} onChange={e => setFeedbackMsg(e.target.value)} />
-                        <button type="submit" disabled={feedbackLoading} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-2`}>
-                            {feedbackLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} TRANSMIT REPORT
-                        </button>
-                    </form>
-                </>
-            ) : (
-                <div className="text-center py-20 animate-in fade-in zoom-in duration-500"><CheckCircle2 className="w-20 h-20 text-emerald-500 mx-auto mb-6 animate-bounce" /><h3 className="text-4xl font-black italic uppercase tracking-tighter text-emerald-500">Received</h3></div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* PUBLIC INTEL DECK (Operator Profile Viewer) */}
+      {/* PROFILE VIEW MODAL */}
       {viewingProfile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
-          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
+          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative`}>
             <button onClick={() => setViewingProfile(null)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
-            <div className="text-center mb-10">
-                <div className="w-24 h-24 mx-auto mb-6 rounded-3xl bg-indigo-600 flex items-center justify-center text-white text-4xl font-black shadow-xl">{viewingProfile.displayName.charAt(0)}</div>
-                <h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3>
-            </div>
-
-            {/* PUBLIC ACHIEVEMENTS */}
-            <div className="flex justify-center gap-2 mb-10">
-                {ACHIEVEMENTS.map(ach => (
-                    <div key={ach.id} title={ach.title} className={`p-3 rounded-xl border ${viewingProfile.achievements?.includes(ach.id) ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-slate-500/5 border-transparent opacity-10'}`}>
-                        {React.createElement(ach.icon, { className: "w-5 h-5" })}
-                    </div>
-                ))}
-            </div>
-
-            <div className="grid grid-cols-3 gap-4 mb-10">
-                {Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (<div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>))}
-            </div>
-            <div className="space-y-2">
-                <p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>
-                {viewingProfile.showcaseGames?.map((game, idx) => game && (<div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4"><span className="text-[9px] font-black opacity-20">0{idx+1}</span><span className="text-xs font-black uppercase tracking-tight italic">{game}</span></div>))}
-            </div>
-            <button onClick={() => setViewingProfile(null)} className="w-full mt-10 py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Intel Deck</button>
+            <div className="text-center mb-10"><div className="w-24 h-24 mx-auto mb-6 rounded-3xl bg-indigo-600 flex items-center justify-center text-white text-4xl font-black shadow-xl">{viewingProfile.displayName.charAt(0)}</div><h3 className="text-3xl font-black italic uppercase tracking-tight">{viewingProfile.displayName}</h3></div>
+            <div className="grid grid-cols-3 gap-4 mb-10">{Object.entries(viewingProfile.handles || {}).map(([key, val]) => val && (<div key={key} className="p-3 bg-slate-500/5 border border-slate-500/10 rounded-xl text-center"><p className="text-[7px] font-black uppercase opacity-40 mb-1">{key}</p><p className="text-[9px] font-black uppercase truncate">{val}</p></div>))}</div>
+            <div className="space-y-2"><p className="text-[10px] font-black uppercase opacity-30 mb-4 text-center tracking-widest">Tactical Interests</p>{viewingProfile.showcaseGames?.map((game, idx) => game && (<div key={idx} className="p-3 bg-black/20 rounded-xl border border-white/5 flex items-center gap-4"><span className="text-[9px] font-black opacity-20">0{idx+1}</span><span className="text-xs font-black uppercase tracking-tight italic">{game}</span></div>))}</div>
+            <button onClick={() => setViewingProfile(null)} className="w-full mt-10 py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Intel</button>
           </div>
         </div>
       )}
@@ -757,28 +627,9 @@ const App = () => {
       {rosterGuild && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
           <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl`}>
-            <div className="flex justify-between items-start mb-6">
-                <div>
-                    <h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>
-                    {rosterGuild.isPrivate && (
-                        <div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl">
-                            <div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div>
-                            <button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button>
-                        </div>
-                    )}
-                </div>
-                <button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button>
-            </div>
-            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">
-                {rosterGuild.members?.map((m, idx) => (
-                    <button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}>
-                        <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white shadow-lg group-hover:scale-110 transition">{String(m.name || 'O').charAt(0)}</div>
-                        <div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>
-                        {(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}
-                    </button>
-                ))}
-            </div>
-            <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Roster</button>
+            <div className="flex justify-between items-start mb-6"><div><h3 className="text-4xl font-black uppercase italic tracking-tighter">{rosterGuild.name}</h3>{rosterGuild.isPrivate && (<div className="mt-4 flex items-center gap-4 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl"><div><p className="text-[8px] font-black uppercase opacity-40 tracking-widest">Sector Invite Code</p><p className="text-2xl font-black italic text-indigo-400 tracking-tighter select-all">{rosterGuild.inviteCode}</p></div><button onClick={() => navigator.clipboard.writeText(rosterGuild.inviteCode)} className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg"><Copy className="w-4 h-4" /></button></div>)}</div><button onClick={() => setRosterGuild(null)} className="w-10 h-10 flex items-center justify-center bg-slate-500/10 rounded-full"><X /></button></div>
+            <div className="space-y-3 max-h-[40vh] overflow-y-auto mb-10 pr-2 custom-scrollbar">{rosterGuild.members?.map((m, idx) => (<button key={idx} onClick={() => openPublicProfile(m.uid || m)} className={`w-full text-left ${activeTheme.bg} p-4 rounded-3xl border ${activeTheme.border} flex items-center gap-4 hover:border-indigo-500 transition group`}><div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-[11px] font-black text-white shadow-lg group-hover:scale-110 transition">{String(m.name || 'O').charAt(0)}</div><div className="flex-1 overflow-hidden"><p className="text-sm font-black uppercase tracking-tight truncate">{String(m.name || 'Unknown Op')}</p></div>{(m.uid || m) === rosterGuild.ownerId && <Crown className="w-4 h-4 text-amber-500" />}</button>))}</div>
+            <button onClick={() => setRosterGuild(null)} className="w-full py-5 rounded-3xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">Close Deck</button>
           </div>
         </div>
       )}
