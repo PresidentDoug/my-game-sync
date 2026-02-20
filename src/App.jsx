@@ -57,11 +57,12 @@ import {
   Monitor,
   LayoutGrid,
   Gamepad,
-  Target
+  Target,
+  MessageSquare
 } from 'lucide-react';
 
 // --- PRODUCTION CONFIGURATION ---
-// IMPORTANT: Paste your real Firebase project keys here!
+// 1. Paste your real Firebase project keys here!
 const manualFirebaseConfig = {
   apiKey: "AIzaSyDFHW-ZV5HPxGNJlwbi4Ravrs0tnyRW3Eg",
   authDomain: "gamesync-7fdde.firebaseapp.com",
@@ -70,6 +71,9 @@ const manualFirebaseConfig = {
   messagingSenderId: "209595978385",
   appId: "1:209595978385:web:804bf3167a353073be2530"
 };
+
+// 2. SET YOUR FEEDBACK EMAIL HERE
+const SUPPORT_EMAIL = "jacklancet@gmail.com";
 
 const getFirebaseConfig = () => {
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
@@ -117,8 +121,8 @@ const App = () => {
   const [currentView, setCurrentView] = useState('calendar'); 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
+  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   
-  // Profile Interaction State
   const [rosterGuild, setRosterGuild] = useState(null); 
   const [viewingProfile, setViewingProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -126,6 +130,7 @@ const App = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
   const [newGuild, setNewGuild] = useState({ name: '', desc: '' });
+  const [feedbackMsg, setFeedbackMsg] = useState('');
 
   const [profile, setProfile] = useState({ 
     displayName: 'Operator', 
@@ -210,10 +215,7 @@ const App = () => {
   const saveProfile = async (data) => {
     if (!user || !db) return;
     setProfileSaving(true);
-    // 1. Save Private Info
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info'), data, { merge: true });
-    
-    // 2. Mirror to Public User Directory (Reference Table)
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_directory', user.uid), {
         displayName: data.displayName,
         handles: data.handles || {},
@@ -221,7 +223,6 @@ const App = () => {
         theme: data.theme || 'light',
         uid: user.uid
     }, { merge: true });
-
     setTimeout(() => setProfileSaving(false), 500);
   };
 
@@ -236,6 +237,21 @@ const App = () => {
     } finally {
         setProfileLoading(false);
     }
+  };
+
+  const handleSendFeedback = (e) => {
+    e.preventDefault();
+    const subject = encodeURIComponent(`GAMESYNC FEEDBACK: From ${profile.displayName}`);
+    const body = encodeURIComponent(
+        `OPERATOR INTEL:\n` +
+        `Display Name: ${profile.displayName}\n` +
+        `Operator ID: ${user.uid}\n` +
+        `---------------------------------\n\n` +
+        `MESSAGE:\n${feedbackMsg}`
+    );
+    window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
+    setIsFeedbackModalOpen(false);
+    setFeedbackMsg('');
   };
 
   const deleteGuildSessions = async (gId) => {
@@ -297,7 +313,7 @@ const App = () => {
     if (!db || !user) return;
     const participants = session.participants || [];
     const isJoined = participants.some(p => p.uid === user.uid);
-    const capacity = Number(session.maxOpenings || 0) + 1;
+    const capacity = Number(session.maxOpenings) + 1;
 
     if (isJoined) {
       const updated = participants.filter(p => p.uid !== user.uid);
@@ -337,7 +353,7 @@ const App = () => {
     return groups;
   }, [sessions, activeGuildId, profile.joinedGuilds, searchTerm]);
 
-  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Update Firebase keys in App.jsx.</p></div>;
+  if (!isConfigValid) return <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center"><Shield className="w-16 h-16 text-rose-500 mb-6" /><h2 className="text-3xl font-black uppercase italic">Sync Failed</h2><p className="opacity-50 text-sm">Check Firebase keys in App.jsx.</p></div>;
   if (authLoading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Gamepad2 className="w-12 h-12 text-indigo-500 animate-bounce" /></div>;
 
   if (!user) {
@@ -372,6 +388,7 @@ const App = () => {
         <nav className="flex items-center gap-4">
           <button onClick={() => setCurrentView('calendar')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'calendar' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Hub</button>
           <button onClick={() => setCurrentView('profile')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition ${currentView === 'profile' ? activeTheme.button : 'opacity-40 hover:opacity-100'}`}>Profile</button>
+          <button onClick={() => setIsFeedbackModalOpen(true)} className="p-2 opacity-40 hover:text-indigo-500 transition"><MessageSquare className="w-4 h-4" /></button>
           <button onClick={() => auth.signOut()} className="p-2 opacity-40 hover:text-rose-500 transition"><LogOut className="w-4 h-4" /></button>
         </nav>
       </header>
@@ -414,7 +431,7 @@ const App = () => {
 
                         return (
                           <div key={session.id} className={`${activeTheme.card} border ${activeTheme.border} rounded-[3rem] p-8 shadow-sm transition hover:-translate-y-1 group relative overflow-hidden flex flex-col`}>
-                            {session.isStreaming && <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-rose-600 text-white px-3 py-1 rounded-full animate-pulse shadow-lg"><Video className="w-3 h-3" /><span className="text-[9px] font-black uppercase tracking-widest">{session.streamPlatform} Live</span></div>}
+                            {session.isStreaming && <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-rose-600 text-white px-3 py-1 rounded-full animate-pulse shadow-lg"><Video className="w-3 h-3" /><span className="text-[9px] font-black uppercase tracking-widest">{session.streamPlatform}</span></div>}
                             <h4 className="text-2xl font-black italic uppercase group-hover:text-indigo-600 transition-colors leading-tight mb-4">{String(session.gameTitle)}</h4>
                             <div className="flex flex-wrap gap-4 mb-6 opacity-40">
                               <div className="flex items-center gap-2"><Clock className="w-3 h-3" /><span className="text-[10px] font-black uppercase">{String(session.startTime)}</span></div>
@@ -458,27 +475,28 @@ const App = () => {
                         <button onClick={() => saveProfile(profile)} className={`w-full mt-10 py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2`}>
                             {profileSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} SYNC PROFILE
                         </button>
+                        <button onClick={() => setIsFeedbackModalOpen(true)} className="w-full mt-4 text-[10px] font-black uppercase opacity-40 hover:opacity-100 transition tracking-widest flex items-center justify-center gap-2 underline underline-offset-4 decoration-dotted"><MessageSquare className="w-3 h-3" /> Report Issue / Feedback</button>
                     </div>
 
                     <div className="flex-1 space-y-10">
                         <div>
                             <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Lock className="w-3 h-3" /> Identity Matrix</p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <div className="relative"><LayoutGrid className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="STEAM" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.steam} onChange={e => setProfile({...profile, handles: {...profile.handles, steam: e.target.value}})} /></div>
-                                <div className="relative"><Gamepad2 className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="PSN" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} /></div>
-                                <div className="relative"><Gamepad className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="XBOX" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.xbox} onChange={e => setProfile({...profile, handles: {...profile.handles, xbox: e.target.value}})} /></div>
+                                <div className="relative group"><LayoutGrid className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="STEAM" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.steam} onChange={e => setProfile({...profile, handles: {...profile.handles, steam: e.target.value}})} /></div>
+                                <div className="relative group"><Gamepad2 className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="PSN" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.psn} onChange={e => setProfile({...profile, handles: {...profile.handles, psn: e.target.value}})} /></div>
+                                <div className="relative group"><Gamepad className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="XBOX" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.xbox} onChange={e => setProfile({...profile, handles: {...profile.handles, xbox: e.target.value}})} /></div>
                             </div>
                         </div>
                         <div>
                             <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Video className="w-3 h-3" /> Broadcast Hub</p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <div className="relative"><Tv className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="TWITCH" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.twitch} onChange={e => setProfile({...profile, handles: {...profile.handles, twitch: e.target.value}})} /></div>
-                                <div className="relative"><Youtube className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="YOUTUBE" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.youtube} onChange={e => setProfile({...profile, handles: {...profile.handles, youtube: e.target.value}})} /></div>
-                                <div className="relative"><ExternalLink className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="KICK" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.kick} onChange={e => setProfile({...profile, handles: {...profile.handles, kick: e.target.value}})} /></div>
+                                <div className="relative group"><Tv className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="TWITCH" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.twitch} onChange={e => setProfile({...profile, handles: {...profile.handles, twitch: e.target.value}})} /></div>
+                                <div className="relative group"><Youtube className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="YOUTUBE" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.youtube} onChange={e => setProfile({...profile, handles: {...profile.handles, youtube: e.target.value}})} /></div>
+                                <div className="relative group"><ExternalLink className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-20" /><input placeholder="KICK" className={`w-full pl-12 p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase`} value={profile.handles?.kick} onChange={e => setProfile({...profile, handles: {...profile.handles, kick: e.target.value}})} /></div>
                             </div>
                         </div>
                         <div>
-                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Target className="w-3 h-3" /> High Interest Showcase</p>
+                            <p className="text-[10px] font-black uppercase opacity-30 mb-6 tracking-widest flex items-center gap-2"><Target className="w-3 h-3" /> Interest Showcase (Top 5 Games)</p>
                             <div className="space-y-3">
                                 {[0,1,2,3,4].map(idx => (
                                     <input key={idx} placeholder={`GAME 0${idx+1}`} className={`w-full p-4 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-[10px] font-black uppercase focus:border-indigo-500 transition`} value={profile.showcaseGames?.[idx] || ''} onChange={e => {
@@ -497,10 +515,37 @@ const App = () => {
         </div>
       </main>
 
-      {/* PUBLIC INTEL DECK MODAL */}
+      {/* FEEDBACK MODAL: Direct link to creator email */}
+      {isFeedbackModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md transition-all">
+          <div className={`${activeTheme.card} border ${activeTheme.border} rounded-[4rem] p-12 max-w-xl w-full shadow-2xl relative`}>
+            <button onClick={() => setIsFeedbackModalOpen(false)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
+            <div className="text-center mb-10">
+                <MessageSquare className="w-12 h-12 text-indigo-500 mx-auto mb-6" />
+                <h3 className="text-4xl font-black italic uppercase tracking-tighter">Submit Intelligence</h3>
+                <p className="text-[10px] font-black uppercase opacity-30 mt-2 tracking-widest">Reports go directly to primary command</p>
+            </div>
+            
+            <form onSubmit={handleSendFeedback} className="space-y-6">
+                <textarea 
+                    required
+                    placeholder="DESCRIBE ISSUE OR SUGGESTION..."
+                    className={`w-full h-40 p-6 rounded-[2rem] ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase text-xs focus:border-indigo-500 transition shadow-inner resize-none`}
+                    value={feedbackMsg}
+                    onChange={e => setFeedbackMsg(e.target.value)}
+                />
+                <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition flex items-center justify-center gap-2`}>
+                    <Mail className="w-4 h-4" /> GENERATE EMAIL DRAFT
+                </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* PUBLIC PROFILE MODAL (INTEL DECK) */}
       {viewingProfile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl transition-all">
-          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative overflow-hidden`}>
+          <div className={`${viewingProfile.theme === 'dark' ? 'bg-zinc-900 border-zinc-800 text-white' : 'bg-white border-slate-100 text-slate-900'} border rounded-[5rem] p-12 max-w-xl w-full shadow-2xl relative`}>
             <button onClick={() => setViewingProfile(null)} className="absolute top-8 right-8 w-12 h-12 flex items-center justify-center bg-slate-500/10 rounded-full hover:rotate-90 transition"><X /></button>
             <div className="text-center mb-10">
                 <div className="w-24 h-24 mx-auto mb-6 rounded-3xl bg-indigo-600 flex items-center justify-center text-white text-4xl font-black shadow-xl">{viewingProfile.displayName.charAt(0)}</div>
@@ -579,9 +624,9 @@ const App = () => {
               ))}
             </div>
             <div className={`pt-10 border-t ${activeTheme.border} space-y-4`}>
-              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Commission Registry</p>
+              <p className="text-[10px] font-black uppercase opacity-40 text-center tracking-widest">Establish Tactical Sector</p>
               <input placeholder="GUILD NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase focus:border-indigo-500 transition shadow-inner`} value={newGuild.name} onChange={e => setNewGuild({...newGuild, name: e.target.value})} />
-              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Sector</button>
+              <button onClick={createGuild} className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition`}>Commission Registry</button>
             </div>
           </div>
         </div>
@@ -597,21 +642,33 @@ const App = () => {
             </div>
             <form onSubmit={handleSubmitSession} className="space-y-6">
               <input placeholder="GAME / OPERATION NAME" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none font-black uppercase focus:border-indigo-500 transition text-sm shadow-inner`} value={formData.gameTitle} onChange={e => setFormData({...formData, gameTitle: e.target.value})} required />
+              
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <input type="date" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
                 <input type="time" className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} />
-                <div className="relative"><Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="HR" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} /></div>
+                <div className="relative">
+                    <Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
+                    <input type="number" placeholder="HR" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.duration} onChange={e => setFormData({...formData, duration: e.target.value})} />
+                </div>
               </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 <select className={`w-full p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black uppercase`} value={formData.guildId} onChange={e => setFormData({...formData, guildId: e.target.value})} required>
                     <option value="">Select Guild</option>{guilds.filter(g => profile.joinedGuilds?.includes(g.id)).map(g => (<option key={g.id} value={g.id}>{String(g.name)}</option>))}
                 </select>
-                <div className="relative"><UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input type="number" placeholder="SLOTS" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} /></div>
+                <div className="relative">
+                    <UserPlus className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" />
+                    <input type="number" placeholder="SLOTS" className={`w-full pl-12 p-5 rounded-2xl ${activeTheme.bg} border ${activeTheme.border} outline-none text-xs font-black`} value={formData.maxOpenings} onChange={e => setFormData({...formData, maxOpenings: e.target.value})} />
+                </div>
               </div>
+
               <div className={`${activeTheme.bg} p-6 rounded-3xl border ${activeTheme.border} flex items-center justify-between`}>
                 <div className="flex items-center gap-4"><Video className="w-5 h-5 opacity-40" /><div><p className="text-[11px] font-black uppercase tracking-widest">Broadcast Mission</p></div></div>
-                <button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}><div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div></button>
+                <button type="button" onClick={() => setFormData({...formData, isStreaming: !formData.isStreaming})} className={`w-14 h-8 rounded-full transition-colors relative ${formData.isStreaming ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-zinc-800'}`}>
+                    <div className={`absolute top-1 w-6 h-6 rounded-full bg-white transition-all ${formData.isStreaming ? 'left-7 shadow-lg' : 'left-1'}`}></div>
+                </button>
               </div>
+
               <button type="submit" className={`w-full py-5 rounded-3xl ${activeTheme.button} font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition mt-4`}>Deploy Mission</button>
             </form>
           </div>
